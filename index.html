@@ -32,12 +32,12 @@
   .fade-in { animation:fadeIn .25s ease; }
   @keyframes fadeIn { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:translateY(0)} }
   @keyframes spin { to { transform:rotate(360deg); } }
-  @keyframes introSlideLeft { 0% { transform:translateX(-140%) scale(0.8); opacity:0; } 65% { transform:translateX(6%) scale(1.04); opacity:1; } 100% { transform:translateX(0) scale(1); opacity:1; } }
-  @keyframes introSlideRight { 0% { transform:translateX(140%) scale(0.8); opacity:0; } 65% { transform:translateX(-6%) scale(1.04); opacity:1; } 100% { transform:translateX(0) scale(1); opacity:1; } }
-  @keyframes introPop { 0% { transform:scale(0); opacity:0; } 70% { transform:scale(1.2); opacity:1; } 100% { transform:scale(1); opacity:1; } }
-  .intro-left { animation: introSlideLeft 0.55s cubic-bezier(.22,1,.36,1) both; }
-  .intro-right { animation: introSlideRight 0.55s cubic-bezier(.22,1,.36,1) both 0.15s; }
-  .intro-vs { animation: introPop 0.4s ease both 0.45s; }
+  @keyframes introSlideTop { 0% { transform:translateY(-170%) scale(0.7); opacity:0; } 75% { transform:translateY(6%) scale(1.04); opacity:1; } 100% { transform:translateY(0) scale(1); opacity:1; } }
+  @keyframes introSlideBottom { 0% { transform:translateY(170%) scale(0.7); opacity:0; } 75% { transform:translateY(-6%) scale(1.04); opacity:1; } 100% { transform:translateY(0) scale(1); opacity:1; } }
+  @keyframes introPop { 0% { transform:scale(0) rotate(-10deg); opacity:0; } 75% { transform:scale(1.3) rotate(-10deg); opacity:1; } 100% { transform:scale(1) rotate(-10deg); opacity:1; } }
+  .intro-left { animation: introSlideTop 1.3s cubic-bezier(.22,1,.36,1) both; }
+  .intro-right { animation: introSlideBottom 1.3s cubic-bezier(.22,1,.36,1) both 0.9s; }
+  .intro-vs { animation: introPop 0.7s ease both 2.0s; }
   .spin { animation:spin 1s linear infinite; }
   .display { font-family:'Oswald',sans-serif; }
   .mono { font-family:'JetBrains Mono',monospace; }
@@ -151,7 +151,7 @@
     state.modal = "matchIntro";
     render();
     if (introTimer) clearTimeout(introTimer);
-    introTimer = setTimeout(() => { window.proceedFromIntro(); }, 1900);
+    introTimer = setTimeout(() => { window.proceedFromIntro(); }, 3400);
   }
   window.proceedFromIntro = function () {
     if (introTimer) { clearTimeout(introTimer); introTimer = null; }
@@ -1694,18 +1694,22 @@
   function renderMatchIntroModal() {
     const a = state.players.find((p) => p.id === state.introPlayerAId) || { id: "a", name: "?", photo: null };
     const b = state.players.find((p) => p.id === state.introPlayerBId) || { id: "b", name: "?", photo: null };
+    const vsBadge = `<div class="intro-vs" style="position:relative;width:76px;height:76px;display:flex;align-items:center;justify-content:center;">
+      <div style="position:absolute;inset:0;background:linear-gradient(135deg,#1a1a1a,#000);border-radius:16px;border:2px solid var(--gold);box-shadow:0 8px 24px rgba(0,0,0,0.5);"></div>
+      <span class="display" style="position:relative;font-size:26px;font-weight:700;font-style:italic;color:var(--gold);letter-spacing:.02em;">VS</span>
+    </div>`;
     return `<div class="modal-overlay" style="background:rgba(11,27,20,0.97);" onclick="proceedFromIntro()">
-      <div style="display:flex;flex-direction:column;align-items:center;gap:16px;width:100%;padding:20px;">
-        <div class="intro-left" style="display:flex;flex-direction:column;align-items:center;gap:12px;">
-          ${avatarHTML(a, 96)}
-          <div class="display" style="font-size:19px;font-weight:600;color:var(--cream);text-align:center;">${esc(a.name)}</div>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:22px;width:100%;padding:20px;max-height:100%;overflow-y:auto;">
+        <div class="intro-left" style="display:flex;flex-direction:column;align-items:center;gap:14px;">
+          ${avatarHTML(a, 154)}
+          <div class="display" style="font-size:21px;font-weight:600;color:var(--cream);text-align:center;">${esc(a.name)}</div>
         </div>
-        <div class="intro-vs display" style="font-size:26px;font-weight:700;color:var(--gold);letter-spacing:.06em;">VS</div>
-        <div class="intro-right" style="display:flex;flex-direction:column;align-items:center;gap:12px;">
-          ${avatarHTML(b, 96)}
-          <div class="display" style="font-size:19px;font-weight:600;color:var(--cream);text-align:center;">${esc(b.name)}</div>
+        ${vsBadge}
+        <div class="intro-right" style="display:flex;flex-direction:column;align-items:center;gap:14px;">
+          ${avatarHTML(b, 154)}
+          <div class="display" style="font-size:21px;font-weight:600;color:var(--cream);text-align:center;">${esc(b.name)}</div>
         </div>
-        <div style="color:var(--muted);font-size:11px;margin-top:14px;">Zum Überspringen tippen</div>
+        <div style="color:var(--muted);font-size:11px;margin-top:6px;">Zum Überspringen tippen</div>
       </div>
     </div>`;
   }
