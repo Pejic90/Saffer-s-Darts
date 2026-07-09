@@ -1,4 +1,4 @@
-<!DOCTYPE html >
+<!DOCTYPE html>
 <html lang="de">
 <head>
 <meta charset="UTF-8">
@@ -109,6 +109,7 @@
     homeView: "main",
     newLeagueName: "",
     historyLeagueId: null,
+    deleteLeagueId: null,
     activeKoRoundIndex: null,
     activeKoMatchId: null,
     koResultForm: { legsA: 0, legsB: 0 },
@@ -525,6 +526,23 @@
     }).catch((e) => { state.saveError = "Liga konnte nicht erstellt werden: " + e.message; render(); });
   };
 
+  window.openConfirmDeleteLeague = function (id) { state.deleteLeagueId = id; state.modal = "confirmDeleteLeague"; render(); };
+  window.confirmDeleteLeague = function () {
+    if (!db || !state.deleteLeagueId) return;
+    const id = state.deleteLeagueId;
+    const matchesToDelete = state.matches.filter((m) => leagueIdForMatch(m) === id);
+    const batch = db.batch();
+    matchesToDelete.forEach((m) => batch.delete(db.collection("matches").doc(m.id)));
+    batch.delete(db.collection("koPhase").doc(id));
+    batch.delete(db.collection("leagues").doc(id));
+    batch.commit().then(() => {
+      state.modal = "home";
+      state.homeView = "main";
+      state.deleteLeagueId = null;
+      render();
+    }).catch((e) => { state.saveError = "Liga konnte nicht gelöscht werden: " + e.message; render(); });
+  };
+
   window.openNewMatch = function () {
     state.newMatchForm = { a: state.players[0] ? state.players[0].id : "", b: state.players[1] ? state.players[1].id : "", date: "", mode: "Best of 3", round: "Hinrunde" };
     state.modal = "newMatch";
@@ -864,10 +882,7 @@
   }
 
   function rankBadge(rank) {
-    if (rank === 0) return `background:var(--gold);color:#241C05`;
-    if (rank === 1) return `background:var(--cream);color:#241C05`;
-    if (rank === 2) return `background:#8C6A3F;color:#241C05`;
-    return `background:${rank % 2 === 0 ? "var(--panel-border)" : "var(--bg-soft)"};color:var(--cream-dim)`;
+    return `background:var(--panel-border);color:var(--cream-dim)`;
   }
 
   function legStepperHTML(label, value, decClick, incClick) {
@@ -1228,6 +1243,7 @@
     if (state.modal === "confirmKo") return renderConfirmKoModal();
     if (state.modal === "koResult") return renderKoResultModal();
     if (state.modal === "home") return renderHomeModal();
+    if (state.modal === "confirmDeleteLeague") return renderConfirmDeleteLeagueModal();
     return "";
   }
 
@@ -1451,10 +1467,13 @@
       ${archived.length === 0
         ? `<div style="color:var(--muted);font-size:13px;">Noch keine archivierten Ligen.</div>`
         : `<div class="col" style="gap:8px;">${archived.map((l) => `
-          <button class="press card row between" style="width:100%;padding:12px 14px;" onclick="openLeagueHistory('${l.id}')">
-            <span style="font-size:14px;font-weight:500;">${esc(l.name)}</span>
-            ${l.winnerName ? `<span class="mono" style="color:var(--gold);font-size:12px;">🏆 ${esc(l.winnerName)}</span>` : ""}
-          </button>`).join("")}</div>`}
+          <div class="row" style="gap:6px;">
+            <button class="press card row between" style="flex:1;min-width:0;padding:12px 14px;" onclick="openLeagueHistory('${l.id}')">
+              <span style="font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(l.name)}</span>
+              ${l.winnerName ? `<span class="mono" style="color:var(--gold);font-size:12px;flex-shrink:0;margin-left:8px;">🏆 ${esc(l.winnerName)}</span>` : ""}
+            </button>
+            ${state.isAdmin ? `<button class="press icon-btn" style="background:var(--bg-soft);border-radius:12px;flex-shrink:0;" onclick="openConfirmDeleteLeague('${l.id}')">${iconTrash(15, "var(--muted)")}</button>` : ""}
+          </div>`).join("")}</div>`}
     `;
     return modalShell("Home", body, "");
   }
@@ -1472,24 +1491,66 @@
     return modalShell("Neue Liga", body, footer);
   }
 
+  function historyMatchRowHTML(m) {
+    const isDone = m.status === "beendet";
+    const aWon = isDone && m.legsA > m.legsB;
+    const bWon = isDone && m.legsB > m.legsA;
+    return `<div class="card" style="padding:10px 14px;">
+      <div class="row" style="gap:8px;">
+        <span style="flex:1;min-width:0;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:${aWon ? 600 : 500};color:${aWon ? "var(--gold)" : "var(--cream)"}">${esc(playerName(m.playerAId))}</span>
+        ${isDone
+          ? `<span class="mono" style="font-size:13px;font-weight:700;padding:0 8px;flex-shrink:0;">${m.legsA}–${m.legsB}</span>`
+          : `<span style="color:var(--muted);font-size:11px;padding:0 8px;flex-shrink:0;">vs</span>`}
+        <span style="flex:1;min-width:0;font-size:13px;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:${bWon ? 600 : 500};color:${bWon ? "var(--gold)" : "var(--cream)"}">${esc(playerName(m.playerBId))}</span>
+      </div>
+    </div>`;
+  }
+
   function renderLeagueHistoryStep() {
     const lg = state.leagues.find((l) => l.id === state.historyLeagueId);
     if (!lg) return renderHomeMain();
     const standings = computeStandings("gesamt", lg.id);
+    const winnerPlayer = lg.winnerId
+      ? (state.players.find((p) => p.id === lg.winnerId) || { id: lg.winnerId, name: lg.winnerName || "?", photo: null })
+      : null;
+    const koPhase = state.koPhases.find((k) => k.id === lg.id) || null;
     const body = `
       <button class="press" style="background:transparent;color:var(--muted);font-size:12px;margin-bottom:12px;padding:0;" onclick="backToHomeMain()">${iconChevronLeft(12, "var(--muted)")} Zurück</button>
-      <div class="display" style="font-size:16px;font-weight:600;margin-bottom:12px;">${esc(lg.name)}</div>
+      <div class="display" style="font-size:16px;font-weight:600;margin-bottom:14px;">${esc(lg.name)}</div>
+      ${winnerPlayer ? `
+        <div class="card" style="text-align:center;padding:24px 16px;margin-bottom:22px;border-color:var(--gold);background:rgba(203,161,53,0.12);">
+          <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:16px;">🏆 Herzlichen Glückwunsch</div>
+          <div style="display:flex;justify-content:center;">${avatarHTML(winnerPlayer, 110)}</div>
+          <div class="display" style="font-size:22px;font-weight:600;color:var(--gold);margin-top:16px;">${esc(winnerPlayer.name)}</div>
+          <div style="color:var(--cream-dim);font-size:12px;margin-top:4px;">Sieger der ${esc(lg.name)}</div>
+        </div>
+      ` : ""}
+      <div style="color:var(--muted);font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.03em;margin-bottom:8px;">Abschlusstabelle</div>
       ${standings.length === 0
-        ? `<div style="color:var(--muted);font-size:13px;">Keine Ergebnisse in dieser Liga.</div>`
-        : `<div class="col" style="gap:6px;max-height:360px;overflow-y:auto;">${standings.map((s, i) => `
+        ? `<div style="color:var(--muted);font-size:13px;margin-bottom:16px;">Keine Ergebnisse in dieser Liga.</div>`
+        : `<div class="col" style="gap:6px;margin-bottom:${koPhase ? "22px" : "4px"};">${standings.map((s, i) => `
           <div class="row" style="gap:10px;padding:8px 2px;border-bottom:1px solid var(--panel-border);">
             <span class="mono" style="width:18px;color:var(--muted);font-size:12px;">${i + 1}</span>
             ${avatarHTML(s.player, 26)}
             <span style="flex:1;min-width:0;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(s.player.name)}</span>
             <span class="mono" style="color:var(--gold);font-size:13px;font-weight:600;flex-shrink:0;">${s.points} Pkt</span>
           </div>`).join("")}</div>`}
+      ${koPhase ? `
+        <div style="color:var(--muted);font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.03em;margin-bottom:8px;">KO-Phase</div>
+        ${koPhase.rounds.map((round, idx) => `
+          <div style="color:var(--muted);font-size:11px;font-weight:500;margin:${idx === 0 ? "0" : "12px"} 0 6px;">${esc(round.name)}</div>
+          <div class="col" style="gap:6px;">${round.matches.map(historyMatchRowHTML).join("")}</div>
+        `).join("")}
+      ` : ""}
     `;
     return modalShell("Liga-Archiv", body, "");
+  }
+
+  function renderConfirmDeleteLeagueModal() {
+    const lg = state.leagues.find((l) => l.id === state.deleteLeagueId);
+    const body = `<p style="color:var(--cream-dim);font-size:14px;margin:0;">Die Liga <b style="color:var(--cream);">${esc(lg ? lg.name : "")}</b> wird inklusive Tabelle, Spielplan und KO-Phase endgültig gelöscht. Das kann nicht rückgängig gemacht werden.</p>`;
+    const footer = `<button class="press" style="flex:1;padding:10px;font-size:14px;font-weight:600;background:var(--red);color:#fff;border-radius:12px;" onclick="confirmDeleteLeague()">Endgültig löschen</button>`;
+    return modalShell("Liga löschen?", body, footer);
   }
 
   render();
