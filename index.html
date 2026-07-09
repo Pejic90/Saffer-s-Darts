@@ -32,6 +32,12 @@
   .fade-in { animation:fadeIn .25s ease; }
   @keyframes fadeIn { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:translateY(0)} }
   @keyframes spin { to { transform:rotate(360deg); } }
+  @keyframes introSlideLeft { 0% { transform:translateX(-140%) scale(0.8); opacity:0; } 65% { transform:translateX(6%) scale(1.04); opacity:1; } 100% { transform:translateX(0) scale(1); opacity:1; } }
+  @keyframes introSlideRight { 0% { transform:translateX(140%) scale(0.8); opacity:0; } 65% { transform:translateX(-6%) scale(1.04); opacity:1; } 100% { transform:translateX(0) scale(1); opacity:1; } }
+  @keyframes introPop { 0% { transform:scale(0); opacity:0; } 70% { transform:scale(1.2); opacity:1; } 100% { transform:scale(1); opacity:1; } }
+  .intro-left { animation: introSlideLeft 0.55s cubic-bezier(.22,1,.36,1) both; }
+  .intro-right { animation: introSlideRight 0.55s cubic-bezier(.22,1,.36,1) both 0.15s; }
+  .intro-vs { animation: introPop 0.4s ease both 0.45s; }
   .spin { animation:spin 1s linear infinite; }
   .display { font-family:'Oswald',sans-serif; }
   .mono { font-family:'JetBrains Mono',monospace; }
@@ -114,6 +120,9 @@
     activeKoRoundIndex: null,
     activeKoMatchId: null,
     koResultForm: { legsA: 0, legsB: 0 },
+    introPlayerAId: null,
+    introPlayerBId: null,
+    introOnDone: null,
     connError: false,
     connErrorMsg: "",
     saveError: "",
@@ -132,6 +141,23 @@
     detailPlayerId: null,
     newMatchForm: { a: "", b: "", date: "", mode: "Best of 3", round: "Hinrunde" },
     resultForm: { legsA: 0, legsB: 0, checkoutA: "", checkoutB: "", avgA: "", avgB: "" },
+  };
+
+  let introTimer = null;
+  function showMatchIntro(playerAId, playerBId, onDone) {
+    state.introPlayerAId = playerAId;
+    state.introPlayerBId = playerBId;
+    state.introOnDone = onDone;
+    state.modal = "matchIntro";
+    render();
+    if (introTimer) clearTimeout(introTimer);
+    introTimer = setTimeout(() => { window.proceedFromIntro(); }, 1900);
+  }
+  window.proceedFromIntro = function () {
+    if (introTimer) { clearTimeout(introTimer); introTimer = null; }
+    const cb = state.introOnDone;
+    state.introOnDone = null;
+    if (cb) cb();
   };
 
   function genId() {
@@ -620,7 +646,7 @@
     render();
   };
 
-  window.openResult = function (matchId) {
+  function openResultActual(matchId) {
     const m = state.matches.find((x) => x.id === matchId);
     if (!m) return;
     state.activeMatchId = matchId;
@@ -634,6 +660,12 @@
     };
     state.modal = "result";
     render();
+  }
+  window.openResult = function (matchId) {
+    const m = state.matches.find((x) => x.id === matchId);
+    if (!m) return;
+    if (m.status === "geplant") { showMatchIntro(m.playerAId, m.playerBId, () => openResultActual(matchId)); return; }
+    openResultActual(matchId);
   };
   window.setResultField = function (field, value) { state.resultForm[field] = value; };
   window.stepResult = function (side, delta) {
@@ -718,7 +750,7 @@
   window.openTournamentDetail = function (id) { state.tournamentDetailId = id; render(); };
   window.closeTournamentDetail = function () { state.tournamentDetailId = null; render(); };
 
-  window.openTournamentResult = function (roundIndex, matchId) {
+  function openTournamentResultActual(roundIndex, matchId) {
     const t = state.tournaments.find((x) => x.id === state.tournamentDetailId);
     if (!t) return;
     const m = t.rounds[roundIndex].find((x) => x.id === matchId);
@@ -728,6 +760,14 @@
     state.tournamentResultForm = { legsA: m.legsA == null ? 0 : m.legsA, legsB: m.legsB == null ? 0 : m.legsB };
     state.modal = "tournamentResult";
     render();
+  }
+  window.openTournamentResult = function (roundIndex, matchId) {
+    const t = state.tournaments.find((x) => x.id === state.tournamentDetailId);
+    if (!t) return;
+    const m = t.rounds[roundIndex].find((x) => x.id === matchId);
+    if (!m) return;
+    if (m.status === "geplant") { showMatchIntro(m.playerAId, m.playerBId, () => openTournamentResultActual(roundIndex, matchId)); return; }
+    openTournamentResultActual(roundIndex, matchId);
   };
   window.stepTournamentResult = function (side, delta) {
     const key = side === "a" ? "legsA" : "legsB";
@@ -773,7 +813,7 @@
       .catch((e) => { state.saveError = "KO-Phase konnte nicht gestartet werden: " + e.message; render(); });
   };
 
-  window.openKoResult = function (roundIndex, matchId) {
+  function openKoResultActual(roundIndex, matchId) {
     const t = currentKoPhase();
     if (!t) return;
     const m = t.rounds[roundIndex].matches.find((x) => x.id === matchId);
@@ -783,6 +823,14 @@
     state.koResultForm = { legsA: m.legsA == null ? 0 : m.legsA, legsB: m.legsB == null ? 0 : m.legsB };
     state.modal = "koResult";
     render();
+  }
+  window.openKoResult = function (roundIndex, matchId) {
+    const t = currentKoPhase();
+    if (!t) return;
+    const m = t.rounds[roundIndex].matches.find((x) => x.id === matchId);
+    if (!m) return;
+    if (m.status === "geplant") { showMatchIntro(m.playerAId, m.playerBId, () => openKoResultActual(roundIndex, matchId)); return; }
+    openKoResultActual(roundIndex, matchId);
   };
   window.stepKoResult = function (side, delta) {
     const key = side === "a" ? "legsA" : "legsB";
@@ -1050,12 +1098,39 @@
           : `<span style="color:var(--muted);font-size:12px;padding:0 8px;flex-shrink:0;">vs</span>`}
         <span style="flex:1;min-width:0;font-size:14px;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:${bWon ? 600 : 500};color:${bWon ? "var(--gold)" : "var(--cream)"}">${esc(playerName(m.playerBId))}</span>
       </div>
-      ${showResultBtn ? `<div style="margin-top:8px;text-align:right;">
+      ${showResultBtn ? `<div style="margin-top:8px;text-align:center;">
         <button class="press row" style="gap:4px;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:500;background:${isDone ? "transparent" : "var(--gold)"};color:${isDone ? "var(--muted)" : "#241C05"};display:inline-flex;" onclick="openKoResult(${roundIndex},'${m.id}')">
           ${isDone ? iconPencil(12, "var(--muted)") : iconTarget(12, "#241C05")} ${isDone ? "Bearbeiten" : "Ergebnis"}
         </button>
       </div>` : ""}
     </div>`;
+  }
+
+  function koBracketConnector() {
+    return `<div style="display:flex;justify-content:center;height:18px;position:relative;margin:0 26px;">
+      <div style="position:absolute;left:0;top:0;width:50%;height:18px;border-top:2px solid var(--panel-border);border-right:2px solid var(--panel-border);border-top-right-radius:10px;"></div>
+      <div style="position:absolute;right:0;top:0;width:50%;height:18px;border-top:2px solid var(--panel-border);border-left:2px solid var(--panel-border);border-top-left-radius:10px;"></div>
+    </div>`;
+  }
+
+  function koBracketFunnel() {
+    return `<div style="display:flex;flex-direction:column;align-items:center;margin-bottom:2px;">
+      <svg width="150" height="52" viewBox="0 0 150 52">
+        <path d="M6,4 L144,4 L102,46 L48,46 Z" fill="none" stroke="var(--panel-border)" stroke-width="2"/>
+        <text x="75" y="29" text-anchor="middle" fill="var(--cream-dim)" font-size="12" font-family="Oswald, sans-serif" font-weight="600" letter-spacing="1">TABELLE</text>
+      </svg>
+    </div>`;
+  }
+
+  function renderKoBracket(koPhase, readOnly) {
+    const rounds = koPhase.rounds;
+    const row = (matches, idx) => `<div class="row" style="gap:10px;align-items:stretch;">
+      ${matches.map((m) => `<div style="flex:1;min-width:0;">${readOnly ? historyMatchRowHTML(m) : koMatchCardHTML(m, idx)}</div>`).join("")}
+    </div>`;
+    let html = row(rounds[0].matches, 0);
+    if (rounds[1]) { html += koBracketConnector(); html += row(rounds[1].matches, 1); }
+    if (rounds[2]) { html += koBracketConnector(); html += `<div style="max-width:calc(50% - 5px);margin:0 auto;">${readOnly ? historyMatchRowHTML(rounds[2].matches[0]) : koMatchCardHTML(rounds[2].matches[0], 2)}</div>`; }
+    return html;
   }
 
   function renderKoPhaseSection() {
@@ -1084,10 +1159,7 @@
       <div style="margin-top:24px;">
         <div class="display" style="font-size:16px;font-weight:600;margin-bottom:12px;">🏆 KO-Phase</div>
         ${koPhase.status === "beendet" ? `<div class="card" style="text-align:center;padding:16px;margin-bottom:16px;border-color:var(--gold);"><div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">KO-Phase Sieger</div><div class="display" style="font-size:20px;font-weight:600;color:var(--gold);">🏆 ${esc(playerName(koPhase.winnerId))}</div></div>` : ""}
-        ${koPhase.rounds.map((round, idx) => `
-          <div style="color:var(--muted);font-size:12px;font-weight:500;text-transform:uppercase;letter-spacing:.03em;margin:${idx === 0 ? "0" : "16px"} 0 8px;">${esc(round.name)}</div>
-          <div class="col" style="gap:8px;">${round.matches.map((m) => koMatchCardHTML(m, idx)).join("")}</div>
-        `).join("")}
+        ${renderKoBracket(koPhase, false)}
       </div>
     `;
   }
@@ -1284,6 +1356,7 @@
     if (state.modal === "confirmDeleteLeague") return renderConfirmDeleteLeagueModal();
     if (state.modal === "confirmSwitchLeague") return renderConfirmSwitchLeagueModal();
     if (state.modal === "confirmArchiveLeague") return renderConfirmArchiveLeagueModal();
+    if (state.modal === "matchIntro") return renderMatchIntroModal();
     return "";
   }
 
@@ -1589,10 +1662,7 @@
           </div>`).join("")}</div>`}
       ${koPhase ? `
         <div style="color:var(--muted);font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.03em;margin-bottom:8px;">KO-Phase</div>
-        ${koPhase.rounds.map((round, idx) => `
-          <div style="color:var(--muted);font-size:11px;font-weight:500;margin:${idx === 0 ? "0" : "12px"} 0 6px;">${esc(round.name)}</div>
-          <div class="col" style="gap:6px;">${round.matches.map(historyMatchRowHTML).join("")}</div>
-        `).join("")}
+        ${renderKoBracket(koPhase, true)}
       ` : ""}
       ${state.isAdmin ? `<button class="press btn-gold row center" style="width:100%;gap:6px;padding:10px;font-size:14px;margin-top:20px;" onclick="openConfirmSwitchLeague('${lg.id}')">${iconBracket(16, "#241C05")} ${lg.status === "archiviert" ? "Liga reaktivieren" : "Zu dieser Liga wechseln"}</button>` : ""}
     `;
@@ -1619,6 +1689,25 @@
     const body = `<p style="color:var(--cream-dim);font-size:14px;margin:0;">Die Liga <b style="color:var(--cream);">${esc(lg ? lg.name : "")}</b> wird archiviert und ist danach nur noch als Rückblick einsehbar, nicht mehr bearbeitbar.${champion ? ` Sieger: <b style="color:var(--gold);">${esc(champion.name)}</b>.` : ""}</p>`;
     const footer = `<button class="press btn-gold" style="flex:1;padding:10px;font-size:14px;font-weight:600;" onclick="confirmArchiveLeague()">Archivieren</button>`;
     return modalShell("Liga archivieren?", body, footer);
+  }
+
+  function renderMatchIntroModal() {
+    const a = state.players.find((p) => p.id === state.introPlayerAId) || { id: "a", name: "?", photo: null };
+    const b = state.players.find((p) => p.id === state.introPlayerBId) || { id: "b", name: "?", photo: null };
+    return `<div class="modal-overlay" style="background:rgba(11,27,20,0.97);" onclick="proceedFromIntro()">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:16px;width:100%;padding:20px;">
+        <div class="intro-left" style="display:flex;flex-direction:column;align-items:center;gap:12px;">
+          ${avatarHTML(a, 96)}
+          <div class="display" style="font-size:19px;font-weight:600;color:var(--cream);text-align:center;">${esc(a.name)}</div>
+        </div>
+        <div class="intro-vs display" style="font-size:26px;font-weight:700;color:var(--gold);letter-spacing:.06em;">VS</div>
+        <div class="intro-right" style="display:flex;flex-direction:column;align-items:center;gap:12px;">
+          ${avatarHTML(b, 96)}
+          <div class="display" style="font-size:19px;font-weight:600;color:var(--cream);text-align:center;">${esc(b.name)}</div>
+        </div>
+        <div style="color:var(--muted);font-size:11px;margin-top:14px;">Zum Überspringen tippen</div>
+      </div>
+    </div>`;
   }
 
   render();
