@@ -13,7 +13,7 @@
   :root {
     --bg:#0B1B14; --bg-soft:#122318; --panel:#16281D; --panel-border:#22392A;
     --cream:#F3EDDD; --cream-dim:#B9C4B7; --muted:#7C9184;
-    --red:#C4122F; --red-dim:#7A2131; --gold:#CBA135; --green:#3B7A4C;
+    --red:#C4122F; --red-dim:#7A2131; --gold:#CBA135; --green:#3B7A4C; --blue:#3E9DFF;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { margin:0; padding:0; background:var(--bg); font-family:'Inter',sans-serif; color:var(--cream); }
@@ -120,6 +120,8 @@
     deleteLeagueId: null,
     switchLeagueId: null,
     splashElapsed: false,
+    splashRenderedOnce: false,
+    confirmDeleteKoMatchKey: null,
     activeKoRoundIndex: null,
     activeKoMatchId: null,
     koResultForm: { legsA: 0, legsB: 0 },
@@ -862,12 +864,43 @@
     render();
   };
 
+  window.deleteKoMatch = function (roundIndex, matchId) {
+    const armKey = roundIndex + ":" + matchId;
+    if (state.confirmDeleteKoMatchKey !== armKey) {
+      state.confirmDeleteKoMatchKey = armKey;
+      render();
+      setTimeout(() => { if (state.confirmDeleteKoMatchKey === armKey) { state.confirmDeleteKoMatchKey = null; render(); } }, 3000);
+      return;
+    }
+    state.confirmDeleteKoMatchKey = null;
+    if (!db) return;
+    const t = currentKoPhase();
+    if (!t) return;
+    let rounds;
+    if (roundIndex === 0) {
+      rounds = JSON.parse(JSON.stringify(t.rounds)).slice(0, 1);
+      rounds[0].matches.forEach((m) => { m.status = "geplant"; m.legsA = null; m.legsB = null; m.winnerId = null; });
+    } else {
+      rounds = JSON.parse(JSON.stringify(t.rounds)).slice(0, roundIndex);
+    }
+    db.collection("koPhase").doc(t.id).update({ rounds: rounds, status: "laufend", winnerId: null })
+      .then(() => {
+        state.toast = "Ein Schritt zurückgesetzt";
+        render();
+        setTimeout(() => { state.toast = ""; render(); }, 2400);
+      })
+      .catch((e) => { state.saveError = "Zurücksetzen fehlgeschlagen: " + e.message; render(); });
+  };
+
   /* ---------------- Render ---------------- */
   function render() {
     const app = document.getElementById("app");
     if (state.connError) { app.innerHTML = renderConnError(); return; }
     if (!IS_CONFIGURED) { app.innerHTML = renderSetup(); return; }
-    if (!state.splashElapsed) { app.innerHTML = renderSplash(); return; }
+    if (!state.splashElapsed) {
+      if (!state.splashRenderedOnce) { app.innerHTML = renderSplash(); state.splashRenderedOnce = true; }
+      return;
+    }
     if (!state.playersReady || !state.matchesReady || !state.tournamentsReady || !state.koPhaseReady || !state.leaguesReady) { app.innerHTML = renderLoading(); return; }
     app.innerHTML = renderApp();
     const photoInputs = app.querySelectorAll("[data-photo-input]");
@@ -875,7 +908,7 @@
   }
 
   function renderSplash() {
-    return `<div class="col center" style="min-height:100vh;">
+    return `<div style="min-height:100vh;width:100%;display:flex;align-items:center;justify-content:center;">
       <div class="splash-logo" style="width:220px;height:220px;border-radius:9999px;overflow:hidden;box-shadow:0 20px 50px rgba(0,0,0,0.55);">
         <img src="${LOGO_DATA_URI}" alt="Saffer's Dartsliga" style="width:100%;height:100%;object-fit:cover;">
       </div>
@@ -1027,8 +1060,8 @@
       <button class="press row" style="gap:10px;background:transparent;text-align:left;min-width:0;" onclick="openHome()">
         <div style="background:var(--bg-soft);border:1.5px solid var(--gold);border-radius:12px;padding:2px;width:44px;height:44px;display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0;"><img src="${LOGO_DATA_URI}" alt="Saffer's Dartsliga" style="width:100%;height:100%;object-fit:cover;border-radius:9px;"></div>
         <div style="min-width:0;">
-          <div class="display" style="font-size:18px;font-weight:600;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Saffer's Dartsliga</div>
-          <div class="row" style="gap:4px;color:var(--muted);font-size:10px;margin-top:4px;letter-spacing:.03em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${iconHome(10, "var(--muted)")} ${esc(lg ? lg.name : "Liga wählen")}</div>
+          <div class="display" style="font-size:18px;font-weight:600;line-height:1;color:var(--blue);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Saffer's Dartsliga</div>
+          <div style="color:var(--blue);font-size:12px;font-weight:600;margin-top:4px;letter-spacing:.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(lg ? lg.name : "Liga wählen")}</div>
         </div>
       </button>
       <button class="press row" style="gap:5px;background:var(--panel);border-radius:9999px;padding:7px 12px;flex-shrink:0;" onclick="${state.isAdmin ? "lockAdmin()" : "openAdminLogin()"}">
@@ -1049,6 +1082,10 @@
     return `<div class="bottom-nav">
       ${navBtn("table", "Tabelle", iconTrophy)}
       ${navBtn("schedule", "Spielplan", iconCalendar)}
+      <button class="press nav-btn" onclick="openHome()">
+        ${iconHome(19, state.modal === "home" ? "var(--gold)" : "var(--muted)")}
+        <span style="font-size:9.5px;font-weight:500;color:${state.modal === "home" ? "var(--cream)" : "var(--muted)"};white-space:nowrap;">Home</span>
+      </button>
       ${navBtn("players", "Spieler", iconUsers)}
       ${navBtn("tournament", "Turniermodus", iconBracket)}
     </div>`;
@@ -1110,10 +1147,11 @@
           : `<span style="color:var(--muted);font-size:12px;padding:0 8px;flex-shrink:0;">vs</span>`}
         <span style="flex:1;min-width:0;font-size:14px;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:${bWon ? 600 : 500};color:${bWon ? "var(--gold)" : "var(--cream)"}">${esc(playerName(m.playerBId))}</span>
       </div>
-      ${showResultBtn ? `<div style="margin-top:8px;text-align:center;">
-        <button class="press row" style="gap:4px;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:500;background:${isDone ? "transparent" : "var(--gold)"};color:${isDone ? "var(--muted)" : "#241C05"};display:inline-flex;" onclick="openKoResult(${roundIndex},'${m.id}')">
+      ${showResultBtn || state.isAdmin ? `<div class="row" style="gap:6px;margin-top:8px;justify-content:center;">
+        ${showResultBtn ? `<button class="press row" style="gap:4px;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:500;background:${isDone ? "transparent" : "var(--gold)"};color:${isDone ? "var(--muted)" : "#241C05"};display:inline-flex;" onclick="openKoResult(${roundIndex},'${m.id}')">
           ${isDone ? iconPencil(12, "var(--muted)") : iconTarget(12, "#241C05")} ${isDone ? "Bearbeiten" : "Ergebnis"}
-        </button>
+        </button>` : ""}
+        ${state.isAdmin && isDone ? `<button class="press icon-btn" style="background:${state.confirmDeleteKoMatchKey === (roundIndex + ":" + m.id) ? "var(--red)" : "var(--bg-soft)"};" onclick="deleteKoMatch(${roundIndex},'${m.id}')">${iconTrash(13, state.confirmDeleteKoMatchKey === (roundIndex + ":" + m.id) ? "#fff" : "var(--muted)")}</button>` : ""}
       </div>` : ""}
     </div>`;
   }
