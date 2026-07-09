@@ -110,6 +110,7 @@
     newLeagueName: "",
     historyLeagueId: null,
     deleteLeagueId: null,
+    switchLeagueId: null,
     activeKoRoundIndex: null,
     activeKoMatchId: null,
     koResultForm: { legsA: 0, legsB: 0 },
@@ -151,6 +152,14 @@
     const lg = activeLeague();
     if (!lg) return null;
     return state.koPhases.find((k) => k.id === lg.id) || null;
+  }
+  function leagueChampion(leagueId) {
+    const ko = state.koPhases.find((k) => k.id === leagueId);
+    if (ko && ko.status === "beendet" && ko.winnerId) {
+      return state.players.find((p) => p.id === ko.winnerId) || { id: ko.winnerId, name: "?" };
+    }
+    const standings = computeStandings("gesamt", leagueId);
+    return standings.length ? standings[0].player : null;
   }
 
   function esc(s) {
@@ -500,8 +509,6 @@
     const name = (state.newLeagueName || "").trim();
     if (!name || !db) return;
     const current = activeLeague();
-    const standings = computeStandings("gesamt");
-    const champion = standings.length ? standings[0].player : null;
     const batch = db.batch();
     const newRef = db.collection("leagues").doc();
     batch.set(newRef, {
@@ -510,12 +517,7 @@
       archivedAt: null, winnerId: null, winnerName: null,
     });
     if (current) {
-      batch.update(db.collection("leagues").doc(current.id), {
-        status: "archiviert",
-        archivedAt: firebase.firestore.FieldValue.serverTimestamp(),
-        winnerId: champion ? champion.id : null,
-        winnerName: champion ? champion.name : null,
-      });
+      batch.update(db.collection("leagues").doc(current.id), { status: "inaktiv" });
     }
     batch.commit().then(() => {
       state.modal = null;
@@ -541,6 +543,42 @@
       state.deleteLeagueId = null;
       render();
     }).catch((e) => { state.saveError = "Liga konnte nicht gelöscht werden: " + e.message; render(); });
+  };
+
+  window.openConfirmSwitchLeague = function (id) { state.switchLeagueId = id; state.modal = "confirmSwitchLeague"; render(); };
+  window.confirmSwitchLeague = function () {
+    if (!db || !state.switchLeagueId) return;
+    const targetId = state.switchLeagueId;
+    const current = activeLeague();
+    const batch = db.batch();
+    batch.update(db.collection("leagues").doc(targetId), { status: "aktiv", archivedAt: null, winnerId: null, winnerName: null });
+    if (current && current.id !== targetId) {
+      batch.update(db.collection("leagues").doc(current.id), { status: "inaktiv" });
+    }
+    batch.commit().then(() => {
+      state.modal = "home";
+      state.homeView = "main";
+      state.switchLeagueId = null;
+      state.standingsRound = "gesamt";
+      render();
+    }).catch((e) => { state.saveError = "Liga konnte nicht gewechselt werden: " + e.message; render(); });
+  };
+
+  window.openConfirmArchiveLeague = function () { state.modal = "confirmArchiveLeague"; render(); };
+  window.confirmArchiveLeague = function () {
+    const lg = activeLeague();
+    if (!lg || !db) return;
+    const champion = leagueChampion(lg.id);
+    db.collection("leagues").doc(lg.id).update({
+      status: "archiviert",
+      archivedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      winnerId: champion ? champion.id : null,
+      winnerName: champion ? champion.name : null,
+    }).then(() => {
+      state.modal = "home";
+      state.homeView = "main";
+      render();
+    }).catch((e) => { state.saveError = "Liga konnte nicht archiviert werden: " + e.message; render(); });
   };
 
   window.openNewMatch = function () {
@@ -1244,6 +1282,8 @@
     if (state.modal === "koResult") return renderKoResultModal();
     if (state.modal === "home") return renderHomeModal();
     if (state.modal === "confirmDeleteLeague") return renderConfirmDeleteLeagueModal();
+    if (state.modal === "confirmSwitchLeague") return renderConfirmSwitchLeagueModal();
+    if (state.modal === "confirmArchiveLeague") return renderConfirmArchiveLeagueModal();
     return "";
   }
 
@@ -1456,13 +1496,25 @@
 
   function renderHomeMain() {
     const lg = activeLeague();
-    const archived = state.leagues.filter((l) => l.status !== "aktiv").slice().sort((a, b) => tsVal(b.archivedAt) - tsVal(a.archivedAt));
+    const inactive = state.leagues.filter((l) => l.status === "inaktiv").slice().sort((a, b) => tsVal(b.createdAt) - tsVal(a.createdAt));
+    const archived = state.leagues.filter((l) => l.status === "archiviert").slice().sort((a, b) => tsVal(b.archivedAt) - tsVal(a.archivedAt));
     const body = `
-      <div class="card" style="padding:14px;margin-bottom:16px;border-color:var(--gold);">
+      <div class="card" style="padding:14px;margin-bottom:12px;border-color:var(--gold);">
         <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Aktuelle Liga</div>
         <div class="display" style="font-size:17px;font-weight:600;color:var(--gold);">${esc(lg ? lg.name : "–")}</div>
       </div>
+      ${state.isAdmin && lg ? `<button class="press btn-panel row center" style="width:100%;gap:6px;padding:9px;font-size:13px;margin-bottom:10px;" onclick="openConfirmArchiveLeague()">${iconBracket(14, "var(--cream)")} Liga archivieren</button>` : ""}
       ${state.isAdmin ? `<button class="press btn-gold row center" style="width:100%;gap:6px;padding:10px;font-size:14px;margin-bottom:20px;" onclick="openNewLeagueStep()">${iconPlus(16, "#241C05")} Neue Liga erstellen</button>` : ""}
+      ${inactive.length > 0 ? `
+        <div style="color:var(--muted);font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.03em;margin-bottom:8px;">Andere Ligen</div>
+        <div class="col" style="gap:8px;margin-bottom:20px;">${inactive.map((l) => `
+          <div class="row" style="gap:6px;">
+            <button class="press card row between" style="flex:1;min-width:0;padding:12px 14px;" onclick="openLeagueHistory('${l.id}')">
+              <span style="font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(l.name)}</span>
+            </button>
+            ${state.isAdmin ? `<button class="press" style="background:var(--bg-soft);border-radius:12px;padding:0 12px;font-size:12px;font-weight:600;color:var(--gold);flex-shrink:0;" onclick="openConfirmSwitchLeague('${l.id}')">Wechseln</button>` : ""}
+          </div>`).join("")}</div>
+      ` : ""}
       <div style="color:var(--muted);font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.03em;margin-bottom:8px;">Vergangene Ligen</div>
       ${archived.length === 0
         ? `<div style="color:var(--muted);font-size:13px;">Noch keine archivierten Ligen.</div>`
@@ -1542,6 +1594,7 @@
           <div class="col" style="gap:6px;">${round.matches.map(historyMatchRowHTML).join("")}</div>
         `).join("")}
       ` : ""}
+      ${state.isAdmin ? `<button class="press btn-gold row center" style="width:100%;gap:6px;padding:10px;font-size:14px;margin-top:20px;" onclick="openConfirmSwitchLeague('${lg.id}')">${iconBracket(16, "#241C05")} ${lg.status === "archiviert" ? "Liga reaktivieren" : "Zu dieser Liga wechseln"}</button>` : ""}
     `;
     return modalShell("Liga-Archiv", body, "");
   }
@@ -1551,6 +1604,21 @@
     const body = `<p style="color:var(--cream-dim);font-size:14px;margin:0;">Die Liga <b style="color:var(--cream);">${esc(lg ? lg.name : "")}</b> wird inklusive Tabelle, Spielplan und KO-Phase endgültig gelöscht. Das kann nicht rückgängig gemacht werden.</p>`;
     const footer = `<button class="press" style="flex:1;padding:10px;font-size:14px;font-weight:600;background:var(--red);color:#fff;border-radius:12px;" onclick="confirmDeleteLeague()">Endgültig löschen</button>`;
     return modalShell("Liga löschen?", body, footer);
+  }
+
+  function renderConfirmSwitchLeagueModal() {
+    const lg = state.leagues.find((l) => l.id === state.switchLeagueId);
+    const body = `<p style="color:var(--cream-dim);font-size:14px;margin:0;">Ihr wechselt zu <b style="color:var(--cream);">${esc(lg ? lg.name : "")}</b>. Diese Liga wird aktiv, die aktuelle Liga wird auf "Andere Ligen" verschoben (nicht gelöscht, jederzeit wieder wechselbar).</p>`;
+    const footer = `<button class="press btn-gold" style="flex:1;padding:10px;font-size:14px;font-weight:600;" onclick="confirmSwitchLeague()">Wechseln</button>`;
+    return modalShell("Liga wechseln?", body, footer);
+  }
+
+  function renderConfirmArchiveLeagueModal() {
+    const lg = activeLeague();
+    const champion = lg ? leagueChampion(lg.id) : null;
+    const body = `<p style="color:var(--cream-dim);font-size:14px;margin:0;">Die Liga <b style="color:var(--cream);">${esc(lg ? lg.name : "")}</b> wird archiviert und ist danach nur noch als Rückblick einsehbar, nicht mehr bearbeitbar.${champion ? ` Sieger: <b style="color:var(--gold);">${esc(champion.name)}</b>.` : ""}</p>`;
+    const footer = `<button class="press btn-gold" style="flex:1;padding:10px;font-size:14px;font-weight:600;" onclick="confirmArchiveLeague()">Archivieren</button>`;
+    return modalShell("Liga archivieren?", body, footer);
   }
 
   render();
