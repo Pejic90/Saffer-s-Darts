@@ -123,7 +123,11 @@
     switchLeagueId: null,
     splashElapsed: false,
     splashRenderedOnce: false,
+    liveMatchId: null,
+    liveMatchInput: "",
     confirmDeleteKoMatchKey: null,
+    fullMode: null,
+    confirmCancelFullArmed: false,
     activeKoRoundIndex: null,
     activeKoMatchId: null,
     koResultForm: { legsA: 0, legsB: 0 },
@@ -174,6 +178,136 @@
   };
   function playConfirmSound() {
     try { new Audio(CONFIRM_SOUND_AUDIO).play().catch(() => {}); } catch (e) {}
+  }
+
+  /* ---------------- Vollmodus (Wurf-für-Wurf) ---------------- */
+  window.openFullMatch = function (matchId) {
+    const m = state.matches.find((x) => x.id === matchId);
+    if (!m) return;
+    const modeNum = parseInt(((m.mode || "Best of 3").match(/\d+/) || [3])[0], 10) || 3;
+    const legsToWin = Math.ceil(modeNum / 2);
+    state.fullMode = {
+      matchId, playerAId: m.playerAId, playerBId: m.playerBId,
+      legsToWin, legsA: 0, legsB: 0,
+      leg: null, legsHistory: [],
+      scoreInput: "", error: "", awaitingDarts: false, pendingCheckoutScore: null,
+    };
+    state.modal = "fullMatchSetup";
+    render();
+  };
+  window.startFullMatch = function (who) {
+    const fm = state.fullMode;
+    if (!fm) return;
+    fm.leg = { remaining: { a: 501, b: 501 }, thrower: who, startThrower: who, turns: [] };
+    state.modal = "fullMatchPlay";
+    render();
+  };
+  window.setFullScoreInput = function (v) {
+    const fm = state.fullMode;
+    if (!fm) return;
+    fm.scoreInput = v.replace(/[^0-9]/g, "").slice(0, 3);
+    fm.error = "";
+    render();
+  };
+  window.tapFullQuickScore = function (v) {
+    const fm = state.fullMode;
+    if (!fm) return;
+    fm.scoreInput = String(v);
+    fm.error = "";
+    render();
+  };
+  window.confirmFullTurn = function () {
+    const fm = state.fullMode;
+    if (!fm || !fm.leg || fm.awaitingDarts) return;
+    const raw = fm.scoreInput;
+    if (raw === "") { fm.error = "Bitte Punktzahl eingeben"; render(); return; }
+    const score = parseInt(raw, 10);
+    if (isNaN(score) || score < 0 || score > 180) { fm.error = "Punktzahl muss zwischen 0 und 180 liegen"; render(); return; }
+    const who = fm.leg.thrower;
+    const remBefore = fm.leg.remaining[who];
+    const remAfter = remBefore - score;
+    if (remAfter < 0 || remAfter === 1) {
+      fm.error = `Bust! Rest wäre ${remAfter} – bitte korrigieren (Rest bleibt bei ${remBefore})`;
+      render();
+      return;
+    }
+    if (remAfter === 0) {
+      fm.pendingCheckoutScore = score;
+      fm.awaitingDarts = true;
+      fm.error = "";
+      render();
+      return;
+    }
+    fm.leg.turns.push({ who, score, dartsUsed: 3, checkout: false });
+    fm.leg.remaining[who] = remAfter;
+    fm.leg.thrower = who === "a" ? "b" : "a";
+    fm.scoreInput = "";
+    fm.error = "";
+    render();
+  };
+  window.confirmFullDarts = function (n) {
+    const fm = state.fullMode;
+    if (!fm || !fm.awaitingDarts) return;
+    const who = fm.leg.thrower;
+    const score = fm.pendingCheckoutScore;
+    fm.leg.turns.push({ who, score, dartsUsed: n, checkout: true });
+    fm.leg.remaining[who] = 0;
+    fm.legsHistory.push({ winner: who, turns: fm.leg.turns.slice() });
+    if (who === "a") fm.legsA++; else fm.legsB++;
+    fm.awaitingDarts = false;
+    fm.pendingCheckoutScore = null;
+    fm.scoreInput = "";
+    fm.error = "";
+    if (fm.legsA >= fm.legsToWin || fm.legsB >= fm.legsToWin) {
+      finishFullMatch();
+      return;
+    }
+    const nextStart = fm.leg.startThrower === "a" ? "b" : "a";
+    fm.leg = { remaining: { a: 501, b: 501 }, thrower: nextStart, startThrower: nextStart, turns: [] };
+    render();
+  };
+  window.undoFullTurn = function () {
+    const fm = state.fullMode;
+    if (!fm || !fm.leg || fm.awaitingDarts || fm.leg.turns.length === 0) return;
+    const last = fm.leg.turns.pop();
+    fm.leg.remaining[last.who] += last.score;
+    fm.leg.thrower = last.who;
+    fm.scoreInput = "";
+    fm.error = "";
+    render();
+  };
+  window.cancelFullMatch = function () {
+    if (!state.fullMode) { state.modal = null; render(); return; }
+    if (state.confirmCancelFullArmed) {
+      state.fullMode = null;
+      state.confirmCancelFullArmed = false;
+      state.modal = null;
+      render();
+    } else {
+      state.confirmCancelFullArmed = true;
+      render();
+      setTimeout(() => { state.confirmCancelFullArmed = false; render(); }, 3000);
+    }
+  };
+  function finishFullMatch() {
+    const fm = state.fullMode;
+    let ptsA = 0, dartsA = 0, ptsB = 0, dartsB = 0, coA = null, coB = null;
+    fm.legsHistory.forEach((leg) => {
+      leg.turns.forEach((t) => {
+        if (t.who === "a") { ptsA += t.score; dartsA += t.dartsUsed; if (t.checkout && (coA === null || t.score > coA)) coA = t.score; }
+        else { ptsB += t.score; dartsB += t.dartsUsed; if (t.checkout && (coB === null || t.score > coB)) coB = t.score; }
+      });
+    });
+    const avgA = dartsA ? (ptsA / dartsA * 3) : null;
+    const avgB = dartsB ? (ptsB / dartsB * 3) : null;
+    state.activeMatchId = fm.matchId;
+    state.resultForm = {
+      legsA: fm.legsA, legsB: fm.legsB,
+      checkoutA: coA != null ? String(coA) : "", checkoutB: coB != null ? String(coB) : "",
+      avgA: avgA != null ? avgA.toFixed(2) : "", avgB: avgB != null ? avgB.toFixed(2) : "",
+    };
+    state.fullMode = null;
+    window.confirmResult();
   }
 
   function genId() {
@@ -1252,6 +1386,9 @@
       <div class="row between" style="margin-top:8px;">
         <span style="color:var(--muted);font-size:11px;">${esc(m.mode)} · ${dateStr}</span>
         <div class="row" style="gap:4px;">
+          ${!isDone ? `<button class="press row" style="gap:4px;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:500;background:var(--bg-soft);color:var(--cream-dim);border:1px solid var(--panel-border);" onclick="openFullMatch('${m.id}')">
+            ${iconBracket(12, "var(--cream-dim)")} Vollmodus
+          </button>` : ""}
           ${showResultBtn ? `<button class="press row" style="gap:4px;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:500;background:${isDone ? "transparent" : "var(--gold)"};color:${isDone ? "var(--muted)" : "#241C05"}" onclick="openResult('${m.id}')">
             ${isDone ? iconPencil(12, "var(--muted)") : iconTarget(12, "#241C05")} ${isDone ? "Bearbeiten" : "Ergebnis"}
           </button>` : ""}
@@ -1422,6 +1559,8 @@
     if (state.modal === "confirmSwitchLeague") return renderConfirmSwitchLeagueModal();
     if (state.modal === "confirmArchiveLeague") return renderConfirmArchiveLeagueModal();
     if (state.modal === "matchIntro") return renderMatchIntroModal();
+    if (state.modal === "fullMatchSetup") return renderFullMatchSetupModal();
+    if (state.modal === "fullMatchPlay") return renderFullMatchPlayModal();
     return "";
   }
 
@@ -1775,6 +1914,75 @@
           <div class="display" style="font-size:21px;font-weight:600;color:var(--cream);text-align:center;">${esc(b.name)}</div>
         </div>
         <div style="color:var(--muted);font-size:11px;margin-top:6px;">Zum Überspringen tippen</div>
+      </div>
+    </div>`;
+  }
+
+  function renderFullMatchSetupModal() {
+    const fm = state.fullMode;
+    if (!fm) return "";
+    const a = state.players.find((p) => p.id === fm.playerAId) || { name: "?" };
+    const b = state.players.find((p) => p.id === fm.playerBId) || { name: "?" };
+    const body = `
+      <p style="color:var(--cream-dim);font-size:13px;margin:0 0 16px;">Vollmodus – Startpunktzahl 501, Best of ${fm.legsToWin * 2 - 1}. Wer wirft zuerst?</p>
+      <div class="col" style="gap:10px;">
+        <button class="press btn-gold" style="padding:14px;font-size:15px;font-weight:600;" onclick="startFullMatch('a')">${esc(a.name)}</button>
+        <button class="press btn-gold" style="padding:14px;font-size:15px;font-weight:600;" onclick="startFullMatch('b')">${esc(b.name)}</button>
+      </div>
+    `;
+    return modalShell("Match starten", body, "");
+  }
+
+  function renderFullMatchPlayModal() {
+    const fm = state.fullMode;
+    if (!fm || !fm.leg) return "";
+    const a = state.players.find((p) => p.id === fm.playerAId) || { name: "?" };
+    const b = state.players.find((p) => p.id === fm.playerBId) || { name: "?" };
+    const isAThrower = fm.leg.thrower === "a";
+    const quickScores = [26, 41, 45, 60, 81, 85, 100, 121, 140, 180];
+    const playerBox = (label, remaining, active) => `
+      <div style="flex:1;text-align:center;padding:14px 8px;border-radius:12px;background:${active ? "rgba(203,161,53,0.15)" : "var(--bg-soft)"};border:1.5px solid ${active ? "var(--gold)" : "var(--panel-border)"};">
+        <div style="font-size:12px;color:${active ? "var(--gold)" : "var(--muted)"};font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(label)}</div>
+        <div class="mono display" style="font-size:34px;font-weight:700;color:${active ? "var(--gold)" : "var(--cream)"};margin-top:4px;">${remaining}</div>
+      </div>`;
+    const legsRow = `<div style="text-align:center;color:var(--muted);font-size:12px;margin-bottom:10px;">Leg ${fm.legsHistory.length + 1} · Sätze ${fm.legsA}:${fm.legsB} (Best of ${fm.legsToWin * 2 - 1})</div>`;
+    const turnsList = fm.leg.turns.length
+      ? `<div class="row" style="gap:6px;flex-wrap:wrap;margin-top:10px;justify-content:center;">${fm.leg.turns.map((t) => `<span class="mono" style="font-size:10px;color:var(--muted);background:var(--bg-soft);border-radius:6px;padding:2px 6px;">${t.who === "a" ? esc(a.name).slice(0, 3) : esc(b.name).slice(0, 3)}: ${t.score}</span>`).join("")}</div>`
+      : "";
+    const dartsPrompt = fm.awaitingDarts ? `
+      <div style="margin-top:14px;padding:14px;border-radius:12px;background:rgba(203,161,53,0.12);border:1.5px solid var(--gold);text-align:center;">
+        <div class="display" style="font-size:14px;font-weight:600;color:var(--gold);margin-bottom:10px;">🎯 Checkout! Wie viele Darts?</div>
+        <div class="row" style="gap:8px;">
+          ${[1, 2, 3].map((n) => `<button class="press btn-gold" style="flex:1;padding:10px;font-size:15px;font-weight:700;" onclick="confirmFullDarts(${n})">${n}</button>`).join("")}
+        </div>
+      </div>` : "";
+    const inputArea = fm.awaitingDarts ? "" : `
+      <div style="margin-top:14px;">
+        <input class="field-input mono" type="number" inputmode="numeric" placeholder="Punkte (0–180)" value="${esc(fm.scoreInput)}" style="text-align:center;font-size:20px;font-weight:700;" oninput="setFullScoreInput(this.value)">
+        ${fm.error ? `<div style="color:var(--red);font-size:12px;margin-top:6px;text-align:center;">${esc(fm.error)}</div>` : ""}
+        <div class="row" style="gap:6px;flex-wrap:wrap;margin-top:10px;justify-content:center;">
+          ${quickScores.map((s) => `<button class="press" style="background:var(--bg-soft);border-radius:8px;padding:6px 10px;font-size:12px;font-weight:600;color:var(--cream-dim);" onclick="tapFullQuickScore(${s})">${s}</button>`).join("")}
+        </div>
+        <button class="press btn-gold" style="width:100%;padding:12px;font-size:15px;font-weight:600;margin-top:12px;" onclick="confirmFullTurn()">Bestätigen</button>
+      </div>`;
+    return `<div class="modal-overlay">
+      <div class="modal-panel" onclick="event.stopPropagation()">
+        <div class="row between" style="margin-bottom:10px;">
+          <span class="display" style="font-size:16px;font-weight:600;">Vollmodus</span>
+          <button class="press icon-btn" style="background:${state.confirmCancelFullArmed ? "var(--red)" : "var(--bg-soft)"};border-radius:9999px;" onclick="cancelFullMatch()">${iconX(16, state.confirmCancelFullArmed ? "#fff" : "var(--muted)")}</button>
+        </div>
+        ${legsRow}
+        <div class="row" style="gap:8px;">
+          ${playerBox(a.name, fm.leg.remaining.a, isAThrower)}
+          ${playerBox(b.name, fm.leg.remaining.b, !isAThrower)}
+        </div>
+        ${turnsList}
+        ${dartsPrompt}
+        ${inputArea}
+        <div class="row" style="gap:8px;margin-top:14px;">
+          <button class="press btn-soft" style="flex:1;padding:10px;font-size:13px;font-weight:500;${fm.leg.turns.length === 0 || fm.awaitingDarts ? "opacity:.4;pointer-events:none;" : ""}" onclick="undoFullTurn()">${iconChevronLeft(12, "var(--muted)")} Rückgängig</button>
+        </div>
+        ${state.confirmCancelFullArmed ? `<div style="color:var(--red);font-size:11px;text-align:center;margin-top:8px;">Nochmal tippen zum Abbrechen – Fortschritt geht verloren</div>` : ""}
       </div>
     </div>`;
   }
