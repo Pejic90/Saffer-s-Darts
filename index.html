@@ -134,6 +134,7 @@
     confirmDeleteKoMatchKey: null,
     fullMode: null,
     confirmCancelFullArmed: false,
+    deleteTournamentId: null,
     activeKoRoundIndex: null,
     activeKoMatchId: null,
     koResultForm: { legsA: 0, legsB: 0 },
@@ -193,8 +194,22 @@
     const modeNum = parseInt(((m.mode || "Best of 3").match(/\d+/) || [3])[0], 10) || 3;
     const legsToWin = Math.ceil(modeNum / 2);
     state.fullMode = {
-      matchId, playerAId: m.playerAId, playerBId: m.playerBId,
+      context: "league", matchId, playerAId: m.playerAId, playerBId: m.playerBId,
       legsToWin, legsA: 0, legsB: 0,
+      leg: null, legsHistory: [],
+      scoreInput: "", error: "", awaitingDarts: false, pendingCheckoutScore: null,
+    };
+    showMatchIntro(m.playerAId, m.playerBId, () => { state.modal = "fullMatchSetup"; render(); });
+  };
+  window.openTournamentFullMatch = function (roundIndex, matchId) {
+    const t = state.tournaments.find((x) => x.id === state.tournamentDetailId);
+    if (!t) return;
+    const m = tournamentMatchAt(t, roundIndex, matchId);
+    if (!m) return;
+    state.fullMode = {
+      context: "tournament", tournamentId: t.id, roundIndex, matchId,
+      playerAId: m.playerAId, playerBId: m.playerBId,
+      legsToWin: 3, legsA: 0, legsB: 0,
       leg: null, legsHistory: [],
       scoreInput: "", error: "", awaitingDarts: false, pendingCheckoutScore: null,
     };
@@ -319,6 +334,21 @@
     });
     const avgA = dartsA ? (ptsA / dartsA * 3) : null;
     const avgB = dartsB ? (ptsB / dartsB * 3) : null;
+    const resultFields = {
+      legsA: fm.legsA, legsB: fm.legsB,
+      checkoutA: coA != null ? coA : null, checkoutB: coB != null ? coB : null,
+      avgA: avgA != null ? Number(avgA.toFixed(2)) : null, avgB: avgB != null ? Number(avgB.toFixed(2)) : null,
+    };
+    if (fm.context === "tournament") {
+      const t = state.tournaments.find((x) => x.id === fm.tournamentId);
+      const ri = fm.roundIndex, mid = fm.matchId;
+      state.fullMode = null;
+      playConfirmSound();
+      if (t) applyTournamentResult(t, ri, mid, resultFields);
+      state.modal = null;
+      render();
+      return;
+    }
     state.activeMatchId = fm.matchId;
     state.resultForm = {
       legsA: fm.legsA, legsB: fm.legsB,
@@ -400,51 +430,57 @@
     return p;
   }
 
+  function newTournamentMatch(a, b) {
+    return {
+      id: genId(), playerAId: a, playerBId: b,
+      legsA: null, legsB: null, checkoutA: null, checkoutB: null, avgA: null, avgB: null,
+      status: "geplant", winnerId: null,
+    };
+  }
+
+  // Firestore rejects nested arrays, so each round is wrapped as { matches: [...] } (same as KO-phase).
   function buildFirstRound(playerIds) {
     const shuffled = shuffleArr(playerIds);
     const bracketSize = nextPowerOf2(shuffled.length);
     const numPairs = bracketSize / 2;
     const byesNeeded = bracketSize - shuffled.length;
-    const pairIndices = shuffleArr(Array.from({ length: numPairs }, (_, i) => i));
-    const byePairSet = new Set(pairIndices.slice(0, byesNeeded));
+    // Randomly decide which pairs become a wildcard (Freilos) when the count is odd/not a power of 2.
+    const byePairSet = new Set(shuffleArr(Array.from({ length: numPairs }, (_, i) => i)).slice(0, byesNeeded));
     let ptr = 0;
     const matches = [];
     for (let p = 0; p < numPairs; p++) {
       const a = shuffled[ptr++];
       const isBye = byePairSet.has(p);
       const b = isBye ? null : shuffled[ptr++];
-      matches.push({
-        id: genId(), playerAId: a, playerBId: b,
-        legsA: isBye ? null : null, legsB: isBye ? null : null,
-        status: isBye ? "beendet" : "geplant",
-        winnerId: isBye ? a : null,
-      });
+      const m = newTournamentMatch(a, b);
+      if (isBye) { m.status = "beendet"; m.winnerId = a; }
+      matches.push(m);
     }
-    return matches;
+    return { matches: matches };
   }
 
-  function buildNextRound(prevRound) {
-    const winners = prevRound.map((m) => m.winnerId);
+  function buildNextTournamentRound(prevRound) {
+    const winners = prevRound.matches.map((m) => m.winnerId);
     const matches = [];
     for (let i = 0; i < winners.length; i += 2) {
-      matches.push({ id: genId(), playerAId: winners[i], playerBId: winners[i + 1], legsA: null, legsB: null, status: "geplant", winnerId: null });
+      matches.push(newTournamentMatch(winners[i], winners[i + 1] === undefined ? null : winners[i + 1]));
     }
-    return matches;
+    return { matches: matches };
   }
 
   function advanceTournament(rounds) {
     const lastRound = rounds[rounds.length - 1];
-    const complete = lastRound.every((m) => m.status === "beendet");
+    const complete = lastRound.matches.every((m) => m.status === "beendet");
     if (!complete) return { rounds, status: "laufend", winnerId: null };
-    if (lastRound.length === 1) return { rounds, status: "beendet", winnerId: lastRound[0].winnerId };
-    return { rounds: [...rounds, buildNextRound(lastRound)], status: "laufend", winnerId: null };
+    if (lastRound.matches.length === 1) return { rounds, status: "beendet", winnerId: lastRound.matches[0].winnerId };
+    return { rounds: [...rounds, buildNextTournamentRound(lastRound)], status: "laufend", winnerId: null };
   }
 
-  function roundLabel(round, idx) {
-    if (round.length === 1) return "Finale";
-    if (round.length === 2) return "Halbfinale";
-    if (round.length === 4) return "Viertelfinale";
-    if (round.length === 8) return "Achtelfinale";
+  function roundLabel(len, idx) {
+    if (len === 1) return "Finale";
+    if (len === 2) return "Halbfinale";
+    if (len === 4) return "Viertelfinale";
+    if (len === 8) return "Achtelfinale";
     return "Runde " + (idx + 1);
   }
 
@@ -903,13 +939,18 @@
     const ids = state.tournamentWizardPlayerIds;
     if (ids.length < 2 || !db) return;
     const round1 = buildFirstRound(ids);
+    // If a round happens to be fully decided by byes, roll forward until a real match is pending.
+    let advanced = advanceTournament([round1]);
+    while (advanced.status === "laufend" && advanced.rounds[advanced.rounds.length - 1].matches.every((m) => m.status === "beendet")) {
+      advanced = advanceTournament(advanced.rounds);
+    }
     db.collection("tournaments").add({
       name: state.tournamentWizardName.trim(),
       createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-      status: "laufend",
+      status: advanced.status,
       playerIds: ids,
-      rounds: [round1],
-      winnerId: null,
+      rounds: advanced.rounds,
+      winnerId: advanced.winnerId,
     }).then((ref) => {
       state.modal = null;
       state.tournamentDetailId = ref.id;
@@ -920,51 +961,91 @@
   window.openTournamentDetail = function (id) { state.tournamentDetailId = id; render(); };
   window.closeTournamentDetail = function () { state.tournamentDetailId = null; render(); };
 
+  function tournamentMatchAt(t, roundIndex, matchId) {
+    const r = t.rounds[roundIndex];
+    if (!r) return null;
+    return r.matches.find((x) => x.id === matchId) || null;
+  }
   function openTournamentResultActual(roundIndex, matchId) {
     const t = state.tournaments.find((x) => x.id === state.tournamentDetailId);
     if (!t) return;
-    const m = t.rounds[roundIndex].find((x) => x.id === matchId);
+    const m = tournamentMatchAt(t, roundIndex, matchId);
     if (!m) return;
     state.activeRoundIndex = roundIndex;
     state.activeTournamentMatchId = matchId;
-    state.tournamentResultForm = { legsA: m.legsA == null ? 0 : m.legsA, legsB: m.legsB == null ? 0 : m.legsB };
+    state.tournamentResultForm = {
+      legsA: m.legsA == null ? 0 : m.legsA, legsB: m.legsB == null ? 0 : m.legsB,
+      checkoutA: m.checkoutA != null ? String(m.checkoutA) : "", checkoutB: m.checkoutB != null ? String(m.checkoutB) : "",
+      avgA: m.avgA != null ? String(m.avgA) : "", avgB: m.avgB != null ? String(m.avgB) : "",
+    };
     state.modal = "tournamentResult";
     render();
   }
   window.openTournamentResult = function (roundIndex, matchId) {
     const t = state.tournaments.find((x) => x.id === state.tournamentDetailId);
     if (!t) return;
-    const m = t.rounds[roundIndex].find((x) => x.id === matchId);
+    const m = tournamentMatchAt(t, roundIndex, matchId);
     if (!m) return;
     if (m.status === "geplant") { showMatchIntro(m.playerAId, m.playerBId, () => openTournamentResultActual(roundIndex, matchId)); return; }
     openTournamentResultActual(roundIndex, matchId);
+  };
+  window.setTournamentResultField = function (key, value) {
+    state.tournamentResultForm[key] = value;
   };
   window.stepTournamentResult = function (side, delta) {
     const key = side === "a" ? "legsA" : "legsB";
     state.tournamentResultForm[key] = Math.max(0, Math.min(9, state.tournamentResultForm[key] + delta));
     render();
   };
-  window.confirmTournamentResult = function () {
-    const f = state.tournamentResultForm;
-    if (f.legsA === f.legsB || !db) return;
-    playConfirmSound();
-    const t = state.tournaments.find((x) => x.id === state.tournamentDetailId);
-    if (!t) return;
-    const rounds = JSON.parse(JSON.stringify(t.rounds));
-    const round = rounds[state.activeRoundIndex];
-    const match = round.find((x) => x.id === state.activeTournamentMatchId);
-    match.legsA = f.legsA; match.legsB = f.legsB; match.status = "beendet";
-    match.winnerId = f.legsA > f.legsB ? match.playerAId : match.playerBId;
-    const updated = advanceTournament(rounds);
-    db.collection("tournaments").doc(t.id).update(updated)
+  // Applies a match result and re-advances the bracket. On correction of an already-played match,
+  // all downstream rounds are discarded and rebuilt, since the winner may have changed.
+  function applyTournamentResult(t, roundIndex, matchId, resultFields) {
+    const rounds = JSON.parse(JSON.stringify(t.rounds)).slice(0, roundIndex + 1);
+    const match = rounds[roundIndex].matches.find((x) => x.id === matchId);
+    if (!match) return;
+    Object.assign(match, resultFields);
+    match.status = "beendet";
+    match.winnerId = resultFields.legsA > resultFields.legsB ? match.playerAId : match.playerBId;
+    let updated = advanceTournament(rounds);
+    while (updated.status === "laufend" && updated.rounds[updated.rounds.length - 1].matches.every((m) => m.status === "beendet")) {
+      updated = advanceTournament(updated.rounds);
+    }
+    const payload = { rounds: updated.rounds, status: updated.status, winnerId: updated.winnerId };
+    if (updated.status === "beendet") { payload.archivedAt = firebase.firestore.FieldValue.serverTimestamp(); }
+    db.collection("tournaments").doc(t.id).update(payload)
       .then(() => {
         state.toast = updated.status === "beendet" ? "Turnier beendet – Sieger steht fest!" : "Ergebnis gespeichert";
         render();
         setTimeout(() => { state.toast = ""; render(); }, 2600);
       })
       .catch((e) => { state.saveError = "Ergebnis konnte nicht gespeichert werden: " + e.message; render(); });
+  }
+  window.confirmTournamentResult = function () {
+    const f = state.tournamentResultForm;
+    if (f.legsA === f.legsB || !db) return;
+    playConfirmSound();
+    const t = state.tournaments.find((x) => x.id === state.tournamentDetailId);
+    if (!t) return;
+    applyTournamentResult(t, state.activeRoundIndex, state.activeTournamentMatchId, {
+      legsA: f.legsA, legsB: f.legsB,
+      checkoutA: f.checkoutA === "" ? null : Number(f.checkoutA),
+      checkoutB: f.checkoutB === "" ? null : Number(f.checkoutB),
+      avgA: f.avgA === "" ? null : Number(f.avgA),
+      avgB: f.avgB === "" ? null : Number(f.avgB),
+    });
     state.modal = null;
     render();
+  };
+  window.openDeleteTournament = function (id) { state.deleteTournamentId = id; state.modal = "confirmDeleteTournament"; render(); };
+  window.confirmDeleteTournament = function () {
+    if (!db || !state.deleteTournamentId) return;
+    const id = state.deleteTournamentId;
+    db.collection("tournaments").doc(id).delete().then(() => {
+      state.modal = null;
+      state.deleteTournamentId = null;
+      state.tournamentDetailId = null;
+      render();
+    }).catch((e) => { state.saveError = "Turnier konnte nicht gelöscht werden: " + e.message; render(); });
   };
 
   window.openConfirmKoPhase = function () { state.modal = "confirmKo"; render(); };
@@ -1499,12 +1580,19 @@
 
   function renderTournamentTab() {
     if (state.tournamentDetailId) return renderTournamentDetail();
-    const list = state.tournaments;
+    const running = state.tournaments.filter((t) => t.status !== "beendet");
+    const finished = state.tournaments.filter((t) => t.status === "beendet")
+      .slice().sort((a, b) => tsVal(b.archivedAt) - tsVal(a.archivedAt));
     return `
       ${state.isAdmin ? `<button class="press btn-gold row center" style="width:100%;gap:6px;padding:10px;font-size:14px;margin-bottom:16px;" onclick="openNewTournament()">${iconPlus(16, "#241C05")} Neues Turnier</button>` : ""}
-      ${list.length === 0
+      ${running.length === 0 && finished.length === 0
         ? emptyState(iconBracket(28, "var(--muted)"), "Noch keine Turniere", state.isAdmin ? "Starte euer erstes Turnier mit dem Button oben." : "Der Admin hat noch kein Turnier gestartet.")
-        : `<div class="col" style="gap:8px;">${list.map(tournamentCardHTML).join("")}</div>`}
+        : ""}
+      ${running.length > 0 ? `<div class="col" style="gap:8px;">${running.map(tournamentCardHTML).join("")}</div>` : ""}
+      ${finished.length > 0 ? `
+        <div style="color:var(--muted);font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.03em;margin:${running.length > 0 ? "22px" : "0"} 0 8px;">Gespielte Turniere</div>
+        <div class="col" style="gap:8px;">${finished.map(tournamentCardHTML).join("")}</div>
+      ` : ""}
     `;
   }
 
@@ -1514,6 +1602,7 @@
     const aWon = isDone && !isBye && m.legsA > m.legsB;
     const bWon = isDone && !isBye && m.legsB > m.legsA;
     const showResultBtn = !isBye && (!isDone || state.isAdmin);
+    const hasExtra = isDone && !isBye && (m.checkoutA != null || m.checkoutB != null || m.avgA != null || m.avgB != null);
     return `<div class="card" style="padding:12px 14px;">
       <div class="row" style="gap:8px;">
         <span style="flex:1;min-width:0;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:${aWon ? 600 : 500};color:${aWon ? "var(--gold)" : "var(--cream)"}">${esc(playerName(m.playerAId))}</span>
@@ -1524,7 +1613,11 @@
             : `<span style="color:var(--muted);font-size:12px;padding:0 8px;flex-shrink:0;">vs</span>`}
         <span style="flex:1;min-width:0;font-size:14px;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:${bWon ? 600 : 500};color:${bWon ? "var(--gold)" : "var(--cream)"}">${isBye ? "" : esc(playerName(m.playerBId))}</span>
       </div>
-      ${showResultBtn ? `<div style="margin-top:8px;text-align:right;">
+      ${hasExtra ? `<div class="mono" style="color:var(--muted);font-size:10px;margin-top:6px;text-align:center;">Ø ${m.avgA != null ? m.avgA : "–"} · CO ${m.checkoutA != null ? m.checkoutA : "–"} &nbsp;—&nbsp; Ø ${m.avgB != null ? m.avgB : "–"} · CO ${m.checkoutB != null ? m.checkoutB : "–"}</div>` : ""}
+      ${showResultBtn ? `<div class="row" style="gap:6px;margin-top:8px;justify-content:flex-end;">
+        ${!isDone ? `<button class="press row" style="gap:4px;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:500;background:var(--bg-soft);color:var(--cream-dim);border:1px solid var(--panel-border);" onclick="openTournamentFullMatch(${roundIndex},'${m.id}')">
+          ${iconBracket(12, "var(--cream-dim)")} Match Start
+        </button>` : ""}
         <button class="press row" style="gap:4px;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:500;background:${isDone ? "transparent" : "var(--gold)"};color:${isDone ? "var(--muted)" : "#241C05"};display:inline-flex;" onclick="openTournamentResult(${roundIndex},'${m.id}')">
           ${isDone ? iconPencil(12, "var(--muted)") : iconTarget(12, "#241C05")} ${isDone ? "Bearbeiten" : "Ergebnis"}
         </button>
@@ -1532,18 +1625,72 @@
     </div>`;
   }
 
+  // Best checkout & best average across every match of a tournament, each with the player who threw it.
+  function tournamentStatLeaders(t) {
+    let bestCO = null, bestCOplayer = null, bestAvg = null, bestAvgPlayer = null;
+    (t.rounds || []).forEach((round) => {
+      round.matches.forEach((m) => {
+        [["A", m.playerAId], ["B", m.playerBId]].forEach(([side, pid]) => {
+          if (!pid) return;
+          const co = m["checkout" + side];
+          const avg = m["avg" + side];
+          if (co != null && (bestCO === null || co > bestCO)) { bestCO = co; bestCOplayer = pid; }
+          if (avg != null && (bestAvg === null || avg > bestAvg)) { bestAvg = avg; bestAvgPlayer = pid; }
+        });
+      });
+    });
+    return { bestCO, bestCOplayer, bestAvg, bestAvgPlayer };
+  }
+
+  function playerById(id) {
+    return state.players.find((p) => p.id === id) || { id, name: playerName(id), photo: null };
+  }
+
+  function renderTournamentWinnerScreen(t) {
+    const champ = playerById(t.winnerId);
+    const { bestCO, bestCOplayer, bestAvg, bestAvgPlayer } = tournamentStatLeaders(t);
+    const statBlock = (label, valueHtml, player) => `
+      <div class="card" style="text-align:center;padding:18px 16px;border-color:var(--gold);background:rgba(203,161,53,0.08);">
+        <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;">${label}</div>
+        <div style="display:flex;justify-content:center;">${avatarHTML(player, 84)}</div>
+        <div class="display" style="font-size:16px;font-weight:600;color:var(--cream);margin-top:12px;">${esc(player.name)}</div>
+        <div class="display mono" style="font-size:24px;font-weight:700;color:var(--gold);margin-top:2px;">${valueHtml}</div>
+      </div>`;
+    return `
+      <button class="press row" style="gap:4px;margin-bottom:14px;background:transparent;color:var(--muted);font-size:13px;padding:0;" onclick="closeTournamentDetail()">${iconChevronLeft(14, "var(--muted)")} Zurück zu Turnieren</button>
+      <div class="display" style="font-size:18px;font-weight:600;margin-bottom:14px;">${esc(t.name)}</div>
+      <div class="card" style="text-align:center;padding:26px 16px;margin-bottom:14px;border-color:var(--gold);background:rgba(203,161,53,0.12);">
+        <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:16px;">🏆 Herzlichen Glückwunsch zum Sieg</div>
+        <div style="display:flex;justify-content:center;">${avatarHTML(champ, 140)}</div>
+        <div class="display" style="font-size:24px;font-weight:600;color:var(--gold);margin-top:16px;">${esc(champ.name)}</div>
+        <div style="color:var(--cream-dim);font-size:12px;margin-top:4px;">Turniersieger · ${esc(t.name)}</div>
+      </div>
+      <div class="col" style="gap:12px;margin-bottom:18px;">
+        ${bestCOplayer ? statBlock("Höchster Checkout", String(bestCO), playerById(bestCOplayer)) : ""}
+        ${bestAvgPlayer ? statBlock("Höchster Average", Number(bestAvg).toFixed(2), playerById(bestAvgPlayer)) : ""}
+      </div>
+      <div style="color:var(--muted);font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.03em;margin-bottom:8px;">Turnierbaum</div>
+      ${(t.rounds || []).map((round, idx) => `
+        <div style="color:var(--muted);font-size:12px;font-weight:500;text-transform:uppercase;letter-spacing:.03em;margin:${idx === 0 ? "0" : "18px"} 0 8px;">${roundLabel(round.matches.length, idx)}</div>
+        <div class="col" style="gap:8px;">${round.matches.map((m) => tournamentMatchCardHTML(m, idx)).join("")}</div>
+      `).join("")}
+      ${state.isAdmin ? `<button class="press row center" style="width:100%;gap:6px;padding:10px;font-size:13px;font-weight:500;margin-top:20px;background:rgba(224,90,90,0.12);color:var(--red);border:1px solid var(--red);border-radius:12px;" onclick="openDeleteTournament('${t.id}')">${iconTrash(14, "var(--red)")} Turnier löschen</button>` : ""}
+    `;
+  }
+
   function renderTournamentDetail() {
     const t = state.tournaments.find((x) => x.id === state.tournamentDetailId);
     if (!t) { state.tournamentDetailId = null; return renderTournamentTab(); }
+    if (t.status === "beendet" && t.winnerId) return renderTournamentWinnerScreen(t);
     const rounds = t.rounds || [];
     return `
       <button class="press row" style="gap:4px;margin-bottom:14px;background:transparent;color:var(--muted);font-size:13px;padding:0;" onclick="closeTournamentDetail()">${iconChevronLeft(14, "var(--muted)")} Zurück zu Turnieren</button>
       <div class="display" style="font-size:18px;font-weight:600;margin-bottom:12px;">${esc(t.name)}</div>
-      ${t.winnerId ? `<div class="card" style="text-align:center;padding:16px;margin-bottom:18px;border-color:var(--gold);"><div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Turniersieger</div><div class="display" style="font-size:20px;font-weight:600;color:var(--gold);">🏆 ${esc(playerName(t.winnerId))}</div></div>` : ""}
       ${rounds.map((round, idx) => `
-        <div style="color:var(--muted);font-size:12px;font-weight:500;text-transform:uppercase;letter-spacing:.03em;margin:${idx === 0 ? "0" : "18px"} 0 8px;">${roundLabel(round, idx)}</div>
-        <div class="col" style="gap:8px;">${round.map((m) => tournamentMatchCardHTML(m, idx)).join("")}</div>
+        <div style="color:var(--muted);font-size:12px;font-weight:500;text-transform:uppercase;letter-spacing:.03em;margin:${idx === 0 ? "0" : "18px"} 0 8px;">${roundLabel(round.matches.length, idx)}</div>
+        <div class="col" style="gap:8px;">${round.matches.map((m) => tournamentMatchCardHTML(m, idx)).join("")}</div>
       `).join("")}
+      ${state.isAdmin ? `<button class="press row center" style="width:100%;gap:6px;padding:10px;font-size:13px;font-weight:500;margin-top:20px;background:rgba(224,90,90,0.12);color:var(--red);border:1px solid var(--red);border-radius:12px;" onclick="openDeleteTournament('${t.id}')">${iconTrash(14, "var(--red)")} Turnier löschen</button>` : ""}
     `;
   }
 
@@ -1580,7 +1727,15 @@
     if (state.modal === "matchIntro") return renderMatchIntroModal();
     if (state.modal === "fullMatchSetup") return renderFullMatchSetupModal();
     if (state.modal === "fullMatchPlay") return renderFullMatchPlayModal();
+    if (state.modal === "confirmDeleteTournament") return renderConfirmDeleteTournamentModal();
     return "";
+  }
+
+  function renderConfirmDeleteTournamentModal() {
+    const t = state.tournaments.find((x) => x.id === state.deleteTournamentId);
+    const body = `<p style="color:var(--cream-dim);font-size:14px;margin:0;">Das Turnier <b style="color:var(--cream);">${esc(t ? t.name : "")}</b> wird inklusive Turnierbaum und aller Ergebnisse endgültig gelöscht. Das kann nicht rückgängig gemacht werden.</p>`;
+    const footer = `<button class="press" style="flex:1;padding:10px;font-size:14px;font-weight:600;background:var(--red);color:#fff;border-radius:12px;" onclick="confirmDeleteTournament()">Endgültig löschen</button>`;
+    return modalShell("Turnier löschen?", body, footer);
   }
 
   function renderNewMatchModal() {
@@ -1747,7 +1902,8 @@
   function renderTournamentResultModal() {
     const t = state.tournaments.find((x) => x.id === state.tournamentDetailId);
     if (!t) return "";
-    const m = t.rounds[state.activeRoundIndex].find((x) => x.id === state.activeTournamentMatchId);
+    const round = t.rounds[state.activeRoundIndex];
+    const m = round ? round.matches.find((x) => x.id === state.activeTournamentMatchId) : null;
     if (!m) return "";
     const f = state.tournamentResultForm;
     const canSubmit = f.legsA !== f.legsB;
@@ -1756,7 +1912,28 @@
         <span style="color:var(--muted);font-size:13px;font-weight:500;">Legs</span>
         ${legStepperHTML(playerName(m.playerBId), f.legsB, "stepTournamentResult('b',-1)", "stepTournamentResult('b',1)")}
       </div>
-      ${!canSubmit ? `<div style="color:var(--red);font-size:12px;text-align:center;margin-top:12px;">Unentschieden ist nicht möglich — ein Spieler muss mehr Legs haben.</div>` : ""}`;
+      ${!canSubmit ? `<div style="color:var(--red);font-size:12px;text-align:center;margin-top:12px;">Unentschieden ist nicht möglich — ein Spieler muss mehr Legs haben.</div>` : ""}
+      <div style="color:var(--muted);font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.03em;margin:16px 0 8px;">Statistik (optional)</div>
+      <div class="row" style="gap:10px;">
+        <div style="flex:1;">
+          <div style="color:var(--muted);font-size:10px;margin-bottom:4px;">${esc(playerName(m.playerAId))} · CO</div>
+          <input class="field-input" type="number" inputmode="numeric" placeholder="z.B. 121" value="${esc(f.checkoutA)}" oninput="setTournamentResultField('checkoutA', this.value)">
+        </div>
+        <div style="flex:1;">
+          <div style="color:var(--muted);font-size:10px;margin-bottom:4px;">${esc(playerName(m.playerBId))} · CO</div>
+          <input class="field-input" type="number" inputmode="numeric" placeholder="z.B. 121" value="${esc(f.checkoutB)}" oninput="setTournamentResultField('checkoutB', this.value)">
+        </div>
+      </div>
+      <div class="row" style="gap:10px;margin-top:8px;">
+        <div style="flex:1;">
+          <div style="color:var(--muted);font-size:10px;margin-bottom:4px;">${esc(playerName(m.playerAId))} · Ø</div>
+          <input class="field-input" type="number" step="0.01" inputmode="decimal" placeholder="z.B. 55.3" value="${esc(f.avgA)}" oninput="setTournamentResultField('avgA', this.value)">
+        </div>
+        <div style="flex:1;">
+          <div style="color:var(--muted);font-size:10px;margin-bottom:4px;">${esc(playerName(m.playerBId))} · Ø</div>
+          <input class="field-input" type="number" step="0.01" inputmode="decimal" placeholder="z.B. 55.3" value="${esc(f.avgB)}" oninput="setTournamentResultField('avgB', this.value)">
+        </div>
+      </div>`;
     const footer = `<button class="press btn-gold row center" style="flex:1;gap:6px;padding:10px;font-size:14px;font-weight:600;${canSubmit ? "" : "opacity:.4;pointer-events:none;"}" onclick="confirmTournamentResult()">${iconCheck(16, "#241C05")} Speichern</button>`;
     return modalShell("Ergebnis eintragen", body, footer);
   }
