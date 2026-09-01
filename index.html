@@ -124,6 +124,9 @@
     leaguesReady: false,
     homeView: "main",
     newLeagueName: "",
+    newLeagueParticipants: [],
+    newLeagueRoundMode: "single",
+    newLeagueMode: "Best of 5",
     historyLeagueId: null,
     deleteLeagueId: null,
     switchLeagueId: null,
@@ -132,6 +135,7 @@
     liveMatchId: null,
     liveMatchInput: "",
     confirmDeleteKoMatchKey: null,
+    koSetup: null,
     fullMode: null,
     confirmCancelFullArmed: false,
     deleteTournamentId: null,
@@ -368,6 +372,12 @@
 
   function tsVal(ts) { return ts && ts.seconds ? ts.seconds : 0; }
   function activeLeague() { return state.leagues.find((l) => l.status === "aktiv") || null; }
+  // Participants of a league as player objects. Old leagues without participantIds fall back to all players.
+  function leagueParticipants(lg) {
+    if (!lg || !Array.isArray(lg.participantIds) || lg.participantIds.length === 0) return state.players.slice();
+    const set = new Set(lg.participantIds);
+    return state.players.filter((p) => set.has(p.id));
+  }
   function bootstrapLeagueId() {
     if (!state.leagues.length) return null;
     const sorted = state.leagues.slice().sort((a, b) => tsVal(a.createdAt) - tsVal(b.createdAt));
@@ -503,11 +513,45 @@
     };
   }
 
+  function koRoundName(matchCount) {
+    if (matchCount === 1) return "Finale";
+    if (matchCount === 2) return "Halbfinale";
+    if (matchCount <= 4) return "Viertelfinale";
+    if (matchCount <= 8) return "Achtelfinale";
+    return "Runde";
+  }
+  function buildNextKoRound(prevRound) {
+    const winners = prevRound.matches.map((m) => m.winnerId);
+    const matches = [];
+    for (let i = 0; i < winners.length; i += 2) {
+      const a = winners[i];
+      const b = winners[i + 1] === undefined ? null : winners[i + 1];
+      const m = { id: genId(), playerAId: a, playerBId: b, legsA: null, legsB: null, status: "geplant", winnerId: null };
+      if (b === null) { m.status = "beendet"; m.winnerId = a; }
+      matches.push(m);
+    }
+    return { name: koRoundName(matches.length), matches: matches };
+  }
   function advanceKoPhase(koData) {
     const rounds = koData.rounds;
     const last = rounds[rounds.length - 1];
     const complete = last.matches.every((m) => m.status === "beendet");
     if (!complete) return { rounds, status: "laufend", winnerId: null };
+    // Manual free-matchup bracket: advance generically by pairing winners.
+    if (koData.manual) {
+      if (last.matches.length === 1) return { rounds, status: "beendet", winnerId: last.matches[0].winnerId };
+      let next = buildNextKoRound(last);
+      let all = [...rounds, next];
+      // Skip forward over rounds that are fully decided by byes.
+      while (next.matches.length > 1 && next.matches.every((m) => m.status === "beendet")) {
+        next = buildNextKoRound(next);
+        all = [...all, next];
+      }
+      if (next.matches.length === 1 && next.matches[0].status === "beendet") {
+        return { rounds: all, status: "beendet", winnerId: next.matches[0].winnerId };
+      }
+      return { rounds: all, status: "laufend", winnerId: null };
+    }
     if (last.name === "Ausspielung") {
       const winner36 = last.matches[0].winnerId;
       const winner45 = last.matches[1].winnerId;
@@ -526,10 +570,12 @@
 
   function computeStandings(roundFilter, leagueId) {
     roundFilter = roundFilter || "gesamt";
-    leagueId = leagueId || (activeLeague() && activeLeague().id);
+    const lg = leagueId ? state.leagues.find((l) => l.id === leagueId) : activeLeague();
+    leagueId = leagueId || (lg && lg.id);
     const scopedMatches = leagueId ? matchesForLeague(leagueId) : [];
+    const roster = leagueParticipants(lg);
     const stats = {};
-    state.players.forEach((p) => { stats[p.id] = { player: p, played: 0, wins: 0, losses: 0, legsFor: 0, legsAgainst: 0, points: 0 }; });
+    roster.forEach((p) => { stats[p.id] = { player: p, played: 0, wins: 0, losses: 0, legsFor: 0, legsAgainst: 0, points: 0 }; });
     scopedMatches
       .filter((m) => m.status === "beendet" && stats[m.playerAId] && stats[m.playerBId] && (roundFilter === "gesamt" || (m.round || "Hinrunde") === roundFilter))
       .forEach((m) => {
@@ -735,12 +781,32 @@
 
   window.openHome = function () { state.homeView = "main"; state.modal = "home"; render(); };
   window.backToHomeMain = function () { state.homeView = "main"; render(); };
-  window.openNewLeagueStep = function () { state.newLeagueName = ""; state.homeView = "newLeague"; render(); };
+  window.openNewLeagueStep = function () {
+    state.newLeagueName = "";
+    state.newLeagueParticipants = state.players.map((p) => p.id);
+    state.newLeagueRoundMode = "single";
+    state.newLeagueMode = "Best of 5";
+    state.homeView = "newLeague";
+    render();
+  };
   window.setNewLeagueName = function (v) { state.newLeagueName = v; };
+  window.toggleNewLeagueParticipant = function (id) {
+    const arr = state.newLeagueParticipants;
+    const i = arr.indexOf(id);
+    if (i >= 0) arr.splice(i, 1); else arr.push(id);
+    render();
+  };
+  window.setNewLeagueRoundMode = function (m) { state.newLeagueRoundMode = m; render(); };
+  window.setNewLeagueMode = function (m) { state.newLeagueMode = m; render(); };
+  window.selectAllNewLeagueParticipants = function (all) {
+    state.newLeagueParticipants = all ? state.players.map((p) => p.id) : [];
+    render();
+  };
   window.openLeagueHistory = function (id) { state.historyLeagueId = id; state.homeView = "history"; render(); };
   window.confirmCreateLeague = function () {
     const name = (state.newLeagueName || "").trim();
-    if (!name || !db) return;
+    const participants = (state.newLeagueParticipants || []).slice();
+    if (!name || !db || participants.length < 2) return;
     const current = activeLeague();
     const batch = db.batch();
     const newRef = db.collection("leagues").doc();
@@ -748,6 +814,9 @@
       name: name, status: "aktiv",
       createdAt: firebase.firestore.FieldValue.serverTimestamp(),
       archivedAt: null, winnerId: null, winnerName: null,
+      participantIds: participants,
+      roundMode: state.newLeagueRoundMode || "single",
+      mode: state.newLeagueMode || "Best of 5",
     });
     if (current) {
       batch.update(db.collection("leagues").doc(current.id), { status: "inaktiv" });
@@ -861,12 +930,13 @@
     const round = state.pendingRRRound || "Hinrunde";
     const lg = activeLeague();
     const batch = db.batch();
-    const ps = state.players;
+    const ps = leagueParticipants(lg);
+    const mode = (lg && lg.mode) || "Best of 5";
     for (let i = 0; i < ps.length; i++) {
       for (let j = i + 1; j < ps.length; j++) {
         const ref = db.collection("matches").doc();
         batch.set(ref, {
-          playerAId: ps[i].id, playerBId: ps[j].id, date: null, mode: "Best of 3", round: round,
+          playerAId: ps[i].id, playerBId: ps[j].id, date: null, mode: mode, round: round,
           status: "geplant", legsA: null, legsB: null, leagueId: lg ? lg.id : null, createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
       }
@@ -1073,21 +1143,94 @@
     }).catch((e) => { state.saveError = "Turnier konnte nicht gelöscht werden: " + e.message; render(); });
   };
 
-  window.openConfirmKoPhase = function () { state.modal = "confirmKo"; render(); };
-  window.confirmStartKoPhase = function () {
-    if (!db) return;
+  // ---- KO setup wizard: pick qualifiers, then either auto-seed (exactly 8) or build matchups freely ----
+  window.openKoSetup = function () {
+    const standings = computeStandings("gesamt");
+    state.koSetup = {
+      step: "select",
+      qualifiers: standings.map((s) => s.player.id), // default: everyone, in table order
+      mode: "auto",       // "auto" (only when 8) or "manual"
+      pairs: [],          // [{a, b}] for manual; b === null means Freilos
+      picking: null,      // first player tapped while forming a pair
+      error: "",
+    };
+    state.modal = "koSetup";
+    render();
+  };
+  window.toggleKoQualifier = function (id) {
+    const ks = state.koSetup; if (!ks) return;
+    const i = ks.qualifiers.indexOf(id);
+    if (i >= 0) ks.qualifiers.splice(i, 1); else ks.qualifiers.push(id);
+    ks.pairs = []; ks.picking = null; ks.error = "";
+    if (ks.qualifiers.length !== 8 && ks.mode === "auto") ks.mode = "manual";
+    render();
+  };
+  window.setKoSetupMode = function (m) { state.koSetup.mode = m; state.koSetup.pairs = []; state.koSetup.picking = null; render(); };
+  window.koSetupGoto = function (step) {
+    const ks = state.koSetup; if (!ks) return;
+    if (step === "pairs" && ks.qualifiers.length < 2) { ks.error = "Mindestens 2 Spieler wählen."; render(); return; }
+    ks.error = "";
+    ks.step = step;
+    render();
+  };
+  window.koPickForPair = function (id) {
+    const ks = state.koSetup; if (!ks) return;
+    // ignore already-paired players
+    const used = new Set(); ks.pairs.forEach((p) => { used.add(p.a); if (p.b) used.add(p.b); });
+    if (used.has(id)) return;
+    if (ks.picking === null) { ks.picking = id; }
+    else if (ks.picking === id) { ks.picking = null; }
+    else { ks.pairs.push({ a: ks.picking, b: id }); ks.picking = null; }
+    ks.error = "";
+    render();
+  };
+  window.koAddBye = function (id) {
+    const ks = state.koSetup; if (!ks) return;
+    const used = new Set(); ks.pairs.forEach((p) => { used.add(p.a); if (p.b) used.add(p.b); });
+    if (used.has(id)) return;
+    ks.pairs.push({ a: id, b: null });
+    if (ks.picking === id) ks.picking = null;
+    ks.error = "";
+    render();
+  };
+  window.koRemovePair = function (idx) {
+    const ks = state.koSetup; if (!ks) return;
+    ks.pairs.splice(idx, 1); ks.error = ""; render();
+  };
+  window.cancelKoSetup = function () { state.koSetup = null; state.modal = null; render(); };
+  window.confirmKoSetup = function () {
+    const ks = state.koSetup;
+    if (!ks || !db) return;
     const lg = activeLeague();
     if (!lg) return;
-    const standings = computeStandings("gesamt");
-    if (standings.length !== 8) return;
     const leagueMatches = matchesForLeague(lg.id);
-    const openMatches = leagueMatches.filter((m) => m.status === "geplant").length;
-    if (openMatches > 0 || leagueMatches.length === 0) return;
-    const koData = buildKoPhase(standings);
+    if (leagueMatches.length === 0 || leagueMatches.some((m) => m.status === "geplant")) { ks.error = "Es sind noch offene Spiele im Spielplan."; render(); return; }
+
+    let koData;
+    if (ks.mode === "auto") {
+      if (ks.qualifiers.length !== 8) { ks.error = "Automatik geht nur mit genau 8 Spielern."; render(); return; }
+      const standings = computeStandings("gesamt").filter((s) => ks.qualifiers.indexOf(s.player.id) >= 0);
+      if (standings.length !== 8) { ks.error = "Automatik braucht 8 platzierte Spieler."; render(); return; }
+      koData = buildKoPhase(standings);
+    } else {
+      // Manual: every qualifier must be placed into exactly one pairing (or a bye).
+      const placed = new Set(); ks.pairs.forEach((p) => { placed.add(p.a); if (p.b) placed.add(p.b); });
+      if (placed.size !== ks.qualifiers.length || ks.pairs.length === 0) { ks.error = "Bitte alle Spieler in Paarungen einteilen (übrige per Freilos)."; render(); return; }
+      const matches = ks.pairs.map((p) => {
+        const m = { id: genId(), playerAId: p.a, playerBId: p.b, legsA: null, legsB: null, status: "geplant", winnerId: null };
+        if (p.b === null) { m.status = "beendet"; m.winnerId = p.a; }
+        return m;
+      });
+      koData = { status: "laufend", manual: true, seeds: null, startedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        rounds: [{ name: koRoundName(matches.length), matches: matches }], winnerId: null };
+      // If the first round is fully decided by byes, roll forward.
+      let adv = advanceKoPhase({ rounds: koData.rounds, manual: true });
+      koData.rounds = adv.rounds; koData.status = adv.status; koData.winnerId = adv.winnerId;
+    }
     koData.leagueId = lg.id;
     db.collection("koPhase").doc(lg.id).set(koData)
-      .then(() => { state.modal = null; render(); })
-      .catch((e) => { state.saveError = "KO-Phase konnte nicht gestartet werden: " + e.message; render(); });
+      .then(() => { state.koSetup = null; state.modal = null; render(); })
+      .catch((e) => { state.koSetup.error = "KO-Phase konnte nicht gestartet werden: " + e.message; render(); });
   };
 
   function openKoResultActual(roundIndex, matchId) {
@@ -1125,7 +1268,7 @@
     const match = round.matches.find((x) => x.id === state.activeKoMatchId);
     match.legsA = f.legsA; match.legsB = f.legsB; match.status = "beendet";
     match.winnerId = f.legsA > f.legsB ? match.playerAId : match.playerBId;
-    const updated = advanceKoPhase({ seeds: t.seeds, rounds });
+    const updated = advanceKoPhase({ seeds: t.seeds, rounds, manual: t.manual });
     db.collection("koPhase").doc(t.id).update(updated)
       .then(() => {
         state.toast = updated.status === "beendet" ? "KO-Phase beendet – Sieger steht fest!" : "Ergebnis gespeichert";
@@ -1409,6 +1552,15 @@
   }
 
   function koMatchCardHTML(m, roundIndex) {
+    const isBye = m.playerBId === null || m.playerBId === undefined;
+    if (isBye) {
+      return `<div class="card" style="padding:12px 14px;">
+        <div class="row" style="gap:8px;align-items:center;">
+          <span style="flex:1;min-width:0;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;color:var(--gold);">${esc(playerName(m.playerAId))}</span>
+          <span style="color:var(--gold);font-size:11px;flex-shrink:0;">Freilos ✓</span>
+        </div>
+      </div>`;
+    }
     const isDone = m.status === "beendet";
     const aWon = isDone && m.legsA > m.legsB;
     const bWon = isDone && m.legsB > m.legsA;
@@ -1451,6 +1603,18 @@
     const row = (matches, idx) => `<div class="row" style="gap:10px;align-items:stretch;">
       ${matches.map((m) => `<div style="flex:1;min-width:0;">${readOnly ? historyMatchRowHTML(m) : koMatchCardHTML(m, idx)}</div>`).join("")}
     </div>`;
+    // Manual/flexible bracket: render each round stacked with its label and a connector between rounds.
+    if (koPhase.manual) {
+      let html = "";
+      rounds.forEach((rnd, idx) => {
+        if (idx > 0) html += koBracketConnector();
+        const label = rnd.name || koRoundName(rnd.matches.length);
+        const single = rnd.matches.length === 1;
+        html += `<div style="color:var(--muted);font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.03em;margin:${idx === 0 ? "0" : "6px"} 0 8px;text-align:center;">${esc(label)}</div>`;
+        html += single ? `<div style="max-width:calc(50% - 5px);margin:0 auto;">${readOnly ? historyMatchRowHTML(rnd.matches[0]) : koMatchCardHTML(rnd.matches[0], idx)}</div>` : row(rnd.matches, idx);
+      });
+      return html;
+    }
     let html = row(rounds[0].matches, 0);
     if (rounds[1]) { html += koBracketConnector(); html += row(rounds[1].matches, 1); }
     if (rounds[2]) { html += koBracketConnector(); html += `<div style="max-width:calc(50% - 5px);margin:0 auto;">${readOnly ? historyMatchRowHTML(rounds[2].matches[0]) : koMatchCardHTML(rounds[2].matches[0], 2)}</div>`; }
@@ -1459,20 +1623,20 @@
 
   function renderKoPhaseSection() {
     if (state.standingsRound !== "gesamt") return "";
-    const eightPlayers = state.players.length === 8;
     const koPhase = currentKoPhase();
     const lg = activeLeague();
     const leagueMatches = lg ? matchesForLeague(lg.id) : [];
 
     if (!koPhase) {
-      if (!eightPlayers) {
-        return `<div style="color:var(--muted);font-size:11px;text-align:center;margin-top:18px;">Die KO-Phase ist für genau 8 Liga-Spieler ausgelegt (aktuell ${state.players.length}).</div>`;
+      const koStandings = computeStandings("gesamt");
+      if (koStandings.length < 2) {
+        return `<div style="color:var(--muted);font-size:11px;text-align:center;margin-top:18px;">Für die KO-Phase braucht es mindestens 2 Spieler in der Liga.</div>`;
       }
       if (!state.isAdmin) return "";
       const openMatches = leagueMatches.filter((m) => m.status === "geplant").length;
       const canStart = openMatches === 0 && leagueMatches.length > 0;
       return `
-        <button class="press ${canStart ? "btn-gold" : "btn-panel"} row center" style="width:100%;gap:6px;padding:12px;font-size:14px;margin-top:18px;${canStart ? "" : "opacity:.4;pointer-events:none;"}" onclick="openConfirmKoPhase()">
+        <button class="press ${canStart ? "btn-gold" : "btn-panel"} row center" style="width:100%;gap:6px;padding:12px;font-size:14px;margin-top:18px;${canStart ? "" : "opacity:.4;pointer-events:none;"}" onclick="openKoSetup()">
           ${iconBracket(16, canStart ? "#241C05" : "var(--muted)")} KO-Phase starten
         </button>
         ${!canStart ? `<div style="color:var(--muted);font-size:11px;text-align:center;margin-top:8px;">Erst möglich, wenn alle Spiele im Spielplan abgeschlossen sind${openMatches > 0 ? ` (noch ${openMatches} offen)` : ""}.</div>` : ""}
@@ -1539,7 +1703,7 @@
       </div>
       <div class="row" style="gap:8px;margin-bottom:16px;">
         <button class="press btn-panel row center" style="flex:1;gap:6px;padding:9px;font-size:13px;${disabled ? "opacity:.4;pointer-events:none;" : ""}" onclick="openConfirmRR('Hinrunde')">${iconShuffle(14, "var(--cream)")} Hinrunde</button>
-        <button class="press btn-panel row center" style="flex:1;gap:6px;padding:9px;font-size:13px;${disabled ? "opacity:.4;pointer-events:none;" : ""}" onclick="openConfirmRR('Rückrunde')">${iconShuffle(14, "var(--cream)")} Rückrunde</button>
+        ${(activeLeague() && activeLeague().roundMode === "single") ? "" : `<button class="press btn-panel row center" style="flex:1;gap:6px;padding:9px;font-size:13px;${disabled ? "opacity:.4;pointer-events:none;" : ""}" onclick="openConfirmRR('Rückrunde')">${iconShuffle(14, "var(--cream)")} Rückrunde</button>`}
       </div>` : "";
     const filterUI = `
       <div class="row" style="gap:6px;margin-bottom:10px;flex-wrap:wrap;">
@@ -1757,6 +1921,7 @@
     if (state.modal === "newTournament") return renderNewTournamentModal();
     if (state.modal === "tournamentResult") return renderTournamentResultModal();
     if (state.modal === "confirmKo") return renderConfirmKoModal();
+    if (state.modal === "koSetup") return renderKoSetupModal();
     if (state.modal === "koResult") return renderKoResultModal();
     if (state.modal === "home") return renderHomeModal();
     if (state.modal === "confirmDeleteLeague") return renderConfirmDeleteLeagueModal();
@@ -1990,8 +2155,74 @@
 
   function renderConfirmKoModal() {
     const body = `<p style="color:var(--cream-dim);font-size:14px;margin:0;">Platz 1–2 gehen direkt ins Halbfinale. Platz 3–6 spielen die Ausspielung (3 gegen 6, 4 gegen 5). Platz 7–8 scheiden aus. Das lässt sich danach nicht mehr rückgängig machen.</p>`;
-    const footer = `<button class="press btn-gold" style="flex:1;padding:10px;font-size:14px;font-weight:600;" onclick="confirmStartKoPhase()">KO-Phase starten</button>`;
+    const footer = `<button class="press btn-gold" style="flex:1;padding:10px;font-size:14px;font-weight:600;" onclick="openKoSetup()">KO-Phase starten</button>`;
     return modalShell("KO-Phase starten?", body, footer);
+  }
+
+  function renderKoSetupModal() {
+    const ks = state.koSetup;
+    if (!ks) return "";
+    const standings = computeStandings("gesamt");
+    const nameFor = (id) => { const p = state.players.find((x) => x.id === id); return p ? p.name : "?"; };
+
+    if (ks.step === "select") {
+      const rows = standings.map((s, i) => {
+        const on = ks.qualifiers.indexOf(s.player.id) >= 0;
+        return `<button class="press row" style="width:100%;gap:10px;align-items:center;padding:8px;border-radius:10px;background:${on ? "rgba(203,161,53,0.12)" : "var(--bg-soft)"};border:1px solid ${on ? "var(--gold)" : "var(--panel-border)"};margin-bottom:6px;" onclick="toggleKoQualifier('${s.player.id}')">
+          <span class="mono" style="width:20px;color:var(--muted);font-size:12px;flex-shrink:0;">${i + 1}.</span>
+          ${avatarHTML(s.player, 28)}
+          <span style="flex:1;text-align:left;font-size:14px;color:var(--cream);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(s.player.name)}</span>
+          <span class="mono" style="color:var(--muted);font-size:11px;flex-shrink:0;">${s.points} Pkt</span>
+          <span style="width:22px;height:22px;border-radius:9999px;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:${on ? "var(--gold)" : "transparent"};border:1.5px solid ${on ? "var(--gold)" : "var(--muted)"};">${on ? iconCheck(13, "#241C05") : ""}</span>
+        </button>`;
+      }).join("");
+      const body = `
+        <div style="color:var(--cream-dim);font-size:13px;margin-bottom:12px;">Wer kommt in die KO-Phase? (${ks.qualifiers.length} gewählt)</div>
+        <div style="max-height:300px;overflow-y:auto;">${rows}</div>
+        ${ks.error ? `<div style="color:var(--red);font-size:12px;margin-top:8px;">${esc(ks.error)}</div>` : ""}`;
+      const footer = `<button class="press btn-gold" style="flex:1;padding:10px;font-size:14px;font-weight:600;${ks.qualifiers.length >= 2 ? "" : "opacity:.4;pointer-events:none;"}" onclick="koSetupGoto('pairs')">Weiter</button>`;
+      return modalShell("KO-Phase · Teilnehmer", body, footer);
+    }
+
+    // step === "pairs"
+    const canAuto = ks.qualifiers.length === 8;
+    const modeToggle = `
+      <div class="row" style="gap:8px;margin-bottom:14px;">
+        ${canAuto ? `<button class="press" style="flex:1;padding:9px;font-size:13px;font-weight:600;border-radius:10px;background:${ks.mode === "auto" ? "var(--gold)" : "var(--bg-soft)"};color:${ks.mode === "auto" ? "#241C05" : "var(--cream-dim)"};border:1px solid ${ks.mode === "auto" ? "var(--gold)" : "var(--panel-border)"};" onclick="setKoSetupMode('auto')">Automatik (Tabelle)</button>` : ""}
+        <button class="press" style="flex:1;padding:9px;font-size:13px;font-weight:600;border-radius:10px;background:${ks.mode === "manual" ? "var(--gold)" : "var(--bg-soft)"};color:${ks.mode === "manual" ? "#241C05" : "var(--cream-dim)"};border:1px solid ${ks.mode === "manual" ? "var(--gold)" : "var(--panel-border)"};" onclick="setKoSetupMode('manual')">Paarungen selbst</button>
+      </div>`;
+
+    let inner;
+    if (ks.mode === "auto") {
+      inner = `<div style="color:var(--cream-dim);font-size:13px;line-height:1.5;background:var(--bg-soft);border-radius:10px;padding:12px;">Platz 1–2 gehen direkt ins Halbfinale. Platz 3–6 spielen die Ausspielung (3 gegen 6, 4 gegen 5). Die Sieger treffen im Halbfinale auf Platz 1 & 2.</div>`;
+    } else {
+      const used = new Set(); ks.pairs.forEach((p) => { used.add(p.a); if (p.b) used.add(p.b); });
+      const remaining = ks.qualifiers.filter((id) => !used.has(id));
+      const pairList = ks.pairs.length ? ks.pairs.map((p, idx) => `
+        <div class="row between" style="gap:8px;padding:8px 10px;border-radius:10px;background:var(--bg-soft);border:1px solid var(--panel-border);margin-bottom:6px;">
+          <span style="font-size:13px;color:var(--cream);">${esc(nameFor(p.a))} ${p.b ? `<span style="color:var(--muted);">vs</span> ${esc(nameFor(p.b))}` : `<span style="color:var(--gold);font-size:11px;">· Freilos</span>`}</span>
+          <button class="press icon-btn" style="background:var(--bg-soft);" onclick="koRemovePair(${idx})">${iconTrash(13, "var(--muted)")}</button>
+        </div>`).join("") : `<div style="color:var(--muted);font-size:12px;margin-bottom:6px;">Noch keine Paarungen. Tippe zwei Spieler an, um sie zu paaren.</div>`;
+      const chips = remaining.map((id) => {
+        const picked = ks.picking === id;
+        return `<button class="press" style="padding:7px 12px;font-size:13px;border-radius:9px;background:${picked ? "var(--gold)" : "var(--bg-soft)"};color:${picked ? "#241C05" : "var(--cream)"};border:1px solid ${picked ? "var(--gold)" : "var(--panel-border)"};margin:0 6px 6px 0;" onclick="koPickForPair('${id}')">${esc(nameFor(id))}</button>`;
+      }).join("");
+      inner = `
+        <div style="color:var(--muted);font-size:11px;font-weight:500;text-transform:uppercase;margin-bottom:8px;">Paarungen</div>
+        ${pairList}
+        <div style="color:var(--muted);font-size:11px;font-weight:500;text-transform:uppercase;margin:14px 0 8px;">Noch offen (${remaining.length})</div>
+        ${remaining.length ? `<div class="row" style="flex-wrap:wrap;">${chips}</div>` : `<div style="color:var(--gold);font-size:12px;">Alle Spieler eingeteilt ✓</div>`}
+        ${ks.picking ? `<div class="row" style="gap:8px;margin-top:10px;"><span style="color:var(--cream-dim);font-size:12px;flex:1;">„${esc(nameFor(ks.picking))}" gewählt – Gegner antippen oder:</span><button class="press" style="padding:6px 12px;font-size:12px;border-radius:8px;background:rgba(203,161,53,0.15);color:var(--gold);border:1px solid var(--gold);" onclick="koAddBye('${ks.picking}')">Freilos geben</button></div>` : (remaining.length === 1 ? `<div class="row" style="margin-top:10px;"><button class="press" style="padding:7px 12px;font-size:12px;border-radius:8px;background:rgba(203,161,53,0.15);color:var(--gold);border:1px solid var(--gold);" onclick="koAddBye('${remaining[0]}')">${esc(nameFor(remaining[0]))}: Freilos</button></div>` : "")}
+      `;
+    }
+
+    const body = `
+      <button class="press" style="background:transparent;color:var(--muted);font-size:12px;margin-bottom:12px;padding:0;" onclick="koSetupGoto('select')">${iconChevronLeft(12, "var(--muted)")} Teilnehmer ändern</button>
+      ${modeToggle}
+      ${inner}
+      ${ks.error ? `<div style="color:var(--red);font-size:12px;margin-top:10px;">${esc(ks.error)}</div>` : ""}`;
+    const footer = `<button class="press btn-gold" style="flex:1;padding:10px;font-size:14px;font-weight:600;" onclick="confirmKoSetup()">KO-Phase starten</button>`;
+    return modalShell("KO-Phase · Aufstellung", body, footer);
   }
 
   function renderKoResultModal() {
@@ -2060,12 +2291,48 @@
 
   function renderNewLeagueStep() {
     const lg = activeLeague();
-    const canCreate = (state.newLeagueName || "").trim().length > 0;
+    const name = (state.newLeagueName || "").trim();
+    const selected = state.newLeagueParticipants || [];
+    const canCreate = name.length > 0 && selected.length >= 2;
+    const modes = ["Best of 3", "Best of 5", "Best of 7", "Best of 9"];
+    const playerRows = state.players.length === 0
+      ? `<div style="color:var(--muted);font-size:12px;">Noch keine Spieler angelegt. Lege zuerst im Reiter „Spieler" welche an.</div>`
+      : state.players.map((p) => {
+          const on = selected.indexOf(p.id) >= 0;
+          return `<button class="press row" style="width:100%;gap:10px;align-items:center;padding:8px;border-radius:10px;background:${on ? "rgba(203,161,53,0.12)" : "var(--bg-soft)"};border:1px solid ${on ? "var(--gold)" : "var(--panel-border)"};margin-bottom:6px;" onclick="toggleNewLeagueParticipant('${p.id}')">
+            ${avatarHTML(p, 30)}
+            <span style="flex:1;text-align:left;font-size:14px;color:var(--cream);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(p.name)}</span>
+            <span style="width:22px;height:22px;border-radius:9999px;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:${on ? "var(--gold)" : "transparent"};border:1.5px solid ${on ? "var(--gold)" : "var(--muted)"};">${on ? iconCheck(13, "#241C05") : ""}</span>
+          </button>`;
+        }).join("");
+    const roundChip = (val, label) => `<button class="press" style="flex:1;padding:9px;font-size:13px;font-weight:600;border-radius:10px;background:${state.newLeagueRoundMode === val ? "var(--gold)" : "var(--bg-soft)"};color:${state.newLeagueRoundMode === val ? "#241C05" : "var(--cream-dim)"};border:1px solid ${state.newLeagueRoundMode === val ? "var(--gold)" : "var(--panel-border)"};" onclick="setNewLeagueRoundMode('${val}')">${label}</button>`;
+    const modeChip = (val) => `<button class="press" style="padding:7px 12px;font-size:12px;font-weight:600;border-radius:9px;background:${state.newLeagueMode === val ? "var(--gold)" : "var(--bg-soft)"};color:${state.newLeagueMode === val ? "#241C05" : "var(--cream-dim)"};border:1px solid ${state.newLeagueMode === val ? "var(--gold)" : "var(--panel-border)"};" onclick="setNewLeagueMode('${val}')">${val.replace("Best of ", "Bo")}</button>`;
     const body = `
       <button class="press" style="background:transparent;color:var(--muted);font-size:12px;margin-bottom:12px;padding:0;" onclick="backToHomeMain()">${iconChevronLeft(12, "var(--muted)")} Zurück</button>
-      <div style="color:var(--cream-dim);font-size:13px;margin-bottom:14px;line-height:1.5;">Die aktuelle Liga "${esc(lg ? lg.name : "")}" wird archiviert (Tabelle bleibt einsehbar). Spielplan, Tabelle und KO-Phase starten für die neue Liga komplett neu. Eure Spielerliste bleibt erhalten.</div>
+      <div style="color:var(--cream-dim);font-size:13px;margin-bottom:14px;line-height:1.5;">Die aktuelle Liga "${esc(lg ? lg.name : "")}" wird archiviert (Tabelle bleibt einsehbar). Spielplan, Tabelle und KO-Phase starten neu.</div>
+
       <div style="color:var(--muted);font-size:11px;font-weight:500;text-transform:uppercase;margin-bottom:6px;">Name der neuen Liga</div>
-      <input id="new-league-input" class="field-input" placeholder="z.B. August 2026" value="${esc(state.newLeagueName)}" oninput="setNewLeagueName(this.value)" onkeydown="if(event.key==='Enter'){confirmCreateLeague();}">
+      <input id="new-league-input" class="field-input" placeholder="z.B. August 2026" value="${esc(state.newLeagueName)}" oninput="setNewLeagueName(this.value)">
+
+      <div class="row between" style="margin:18px 0 6px;">
+        <span style="color:var(--muted);font-size:11px;font-weight:500;text-transform:uppercase;">Teilnehmer (${selected.length})</span>
+        <div class="row" style="gap:6px;">
+          <button class="press" style="background:transparent;color:var(--gold);font-size:11px;padding:0;" onclick="selectAllNewLeagueParticipants(true)">Alle</button>
+          <span style="color:var(--muted);font-size:11px;">·</span>
+          <button class="press" style="background:transparent;color:var(--muted);font-size:11px;padding:0;" onclick="selectAllNewLeagueParticipants(false)">Keine</button>
+        </div>
+      </div>
+      <div style="max-height:230px;overflow-y:auto;margin-bottom:4px;">${playerRows}</div>
+      ${selected.length < 2 ? `<div style="color:var(--red);font-size:11px;margin-bottom:4px;">Mindestens 2 Teilnehmer wählen.</div>` : ""}
+
+      <div style="color:var(--muted);font-size:11px;font-weight:500;text-transform:uppercase;margin:16px 0 6px;">Rundenmodus</div>
+      <div class="row" style="gap:8px;margin-bottom:6px;">
+        ${roundChip("single", "Nur Hinrunde")}
+        ${roundChip("double", "Hin- & Rückrunde")}
+      </div>
+
+      <div style="color:var(--muted);font-size:11px;font-weight:500;text-transform:uppercase;margin:16px 0 6px;">Spielmodus pro Match</div>
+      <div class="row" style="gap:6px;flex-wrap:wrap;">${modes.map(modeChip).join("")}</div>
     `;
     const footer = `<button class="press btn-gold" style="flex:1;padding:10px;font-size:14px;font-weight:600;${canCreate ? "" : "opacity:.4;pointer-events:none;"}" onclick="confirmCreateLeague()">Liga starten</button>`;
     return modalShell("Neue Liga", body, footer);
@@ -2086,12 +2353,27 @@
     </div>`;
   }
 
-  function leagueStatLeaders(standings) {
-    // Same idea as tournaments: highest single checkout, and highest per-player mean average.
-    let bestCO = null, bestCOplayer = null, bestAvg = null, bestAvgPlayer = null;
-    standings.forEach((s) => {
-      if (s.maxCheckout != null && (bestCO === null || s.maxCheckout > bestCO)) { bestCO = s.maxCheckout; bestCOplayer = s.player; }
-      if (s.avgAverage != null && (bestAvg === null || s.avgAverage > bestAvg)) { bestAvg = s.avgAverage; bestAvgPlayer = s.player; }
+  function leagueStatLeaders(standings, leagueId) {
+    // Highest single checkout across the league, and highest per-player mean average.
+    const scoped = leagueId ? matchesForLeague(leagueId).filter((m) => m.status === "beendet") : [];
+    let bestCO = null, bestCOplayer = null;
+    const avgAcc = {}; // pid -> { sum, count }
+    scoped.forEach((m) => {
+      [["A", m.playerAId], ["B", m.playerBId]].forEach(([side, pid]) => {
+        if (!pid) return;
+        const co = m["checkout" + side];
+        const avg = m["avg" + side];
+        if (co != null && co !== "" && !isNaN(Number(co)) && (bestCO === null || Number(co) > bestCO)) { bestCO = Number(co); bestCOplayer = playerById(pid); }
+        if (avg != null && avg !== "" && !isNaN(Number(avg))) {
+          if (!avgAcc[pid]) avgAcc[pid] = { sum: 0, count: 0 };
+          avgAcc[pid].sum += Number(avg); avgAcc[pid].count += 1;
+        }
+      });
+    });
+    let bestAvg = null, bestAvgPlayer = null;
+    Object.keys(avgAcc).forEach((pid) => {
+      const mean = avgAcc[pid].sum / avgAcc[pid].count;
+      if (bestAvg === null || mean > bestAvg) { bestAvg = mean; bestAvgPlayer = playerById(pid); }
     });
     return { bestCO, bestCOplayer, bestAvg, bestAvgPlayer };
   }
@@ -2100,7 +2382,7 @@
     const lg = state.leagues.find((l) => l.id === state.historyLeagueId);
     if (!lg) return renderHomeMain();
     const standings = computeStandings("gesamt", lg.id);
-    const leaders = leagueStatLeaders(standings);
+    const leaders = leagueStatLeaders(standings, lg.id);
     const honorBlock = (label, valueHtml, player, sub) => `
       <div class="card" style="text-align:center;padding:16px;border-color:var(--gold);background:rgba(203,161,53,0.08);">
         <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;">${label}</div>
