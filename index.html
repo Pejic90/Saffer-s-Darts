@@ -625,7 +625,7 @@
         else if (opp > my) { losses++; headToHead[oppId].losses++; }
       });
     let maxCheckout = null, avgSum = 0, avgCount = 0;
-    state.matches
+    scopedMatches
       .filter((m) => m.status === "beendet" && (m.playerAId === playerId || m.playerBId === playerId))
       .forEach((m) => {
         const isA = m.playerAId === playerId;
