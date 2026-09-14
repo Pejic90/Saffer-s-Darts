@@ -509,7 +509,29 @@
   function buildKoPhase(standings) {
     const seedPlayer = (rank) => standings[rank - 1].player.id;
     const seeds = {};
-    for (let r = 1; r <= 8; r++) seeds[r] = seedPlayer(r);
+    for (let r = 1; r <= standings.length; r++) seeds[r] = seedPlayer(r);
+
+    // 6-player format: places 1-2 go directly to the quarterfinals.
+    // Places 3-6 play 3 vs 6 and 4 vs 5 first.
+    if (standings.length === 6) {
+      return {
+        status: "laufend",
+        startedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        seeds: seeds,
+        koFormat: "six",
+        manual: true,
+        rounds: [{
+          name: "Ausspielung",
+          matches: [
+            { id: genId(), playerAId: seeds[3], playerBId: seeds[6], legsA: null, legsB: null, status: "geplant", winnerId: null },
+            { id: genId(), playerAId: seeds[4], playerBId: seeds[5], legsA: null, legsB: null, status: "geplant", winnerId: null },
+          ]
+        }],
+        winnerId: null,
+      };
+    }
+
+    // Existing 8-player format remains unchanged.
     const playoff = [
       { id: genId(), playerAId: seeds[3], playerBId: seeds[6], legsA: null, legsB: null, status: "geplant", winnerId: null },
       { id: genId(), playerAId: seeds[4], playerBId: seeds[5], legsA: null, legsB: null, status: "geplant", winnerId: null },
@@ -547,6 +569,28 @@
     const last = rounds[rounds.length - 1];
     const complete = last.matches.every((m) => m.status === "beendet");
     if (!complete) return { rounds, status: "laufend", winnerId: null };
+
+    // Dedicated 6-player format: places 3-6 play first; places 1-2 enter
+    // directly in the quarterfinals. The two QF winners meet in the final.
+    if (koData.koFormat === "six") {
+      if (last.name === "Ausspielung") {
+        const winner36 = last.matches[0].winnerId;
+        const winner45 = last.matches[1].winnerId;
+        const qf = [
+          { id: genId(), playerAId: koData.seeds[1], playerBId: winner45, legsA: null, legsB: null, status: "geplant", winnerId: null },
+          { id: genId(), playerAId: koData.seeds[2], playerBId: winner36, legsA: null, legsB: null, status: "geplant", winnerId: null },
+        ];
+        return { rounds: [...rounds, { name: "Viertelfinale", matches: qf }], status: "laufend", winnerId: null };
+      }
+      if (last.name === "Viertelfinale") {
+        const final = [{ id: genId(), playerAId: last.matches[0].winnerId, playerBId: last.matches[1].winnerId, legsA: null, legsB: null, status: "geplant", winnerId: null }];
+        return { rounds: [...rounds, { name: "Finale", matches: final }], status: "laufend", winnerId: null };
+      }
+      if (last.name === "Finale") {
+        return { rounds, status: "beendet", winnerId: last.matches[0].winnerId };
+      }
+    }
+
     // Manual free-matchup bracket: advance generically by pairing winners.
     if (koData.manual) {
       if (last.matches.length === 1) return { rounds, status: "beendet", winnerId: last.matches[0].winnerId };
@@ -1159,7 +1203,7 @@
     state.koSetup = {
       step: "select",
       qualifiers: standings.map((s) => s.player.id), // default: everyone, in table order
-      mode: "auto",       // "auto" (only when 8) or "manual"
+      mode: "auto",       // "auto" for the fixed 6/8-player format, otherwise manual
       pairs: [],          // [{a, b}] for manual; b === null means Freilos
       picking: null,      // first player tapped while forming a pair
       error: "",
@@ -1172,7 +1216,7 @@
     const i = ks.qualifiers.indexOf(id);
     if (i >= 0) ks.qualifiers.splice(i, 1); else ks.qualifiers.push(id);
     ks.pairs = []; ks.picking = null; ks.error = "";
-    if (ks.qualifiers.length !== 8 && ks.mode === "auto") ks.mode = "manual";
+    if (ks.qualifiers.length !== 6 && ks.qualifiers.length !== 8 && ks.mode === "auto") ks.mode = "manual";
     render();
   };
   window.setKoSetupMode = function (m) { state.koSetup.mode = m; state.koSetup.pairs = []; state.koSetup.picking = null; render(); };
@@ -1218,9 +1262,9 @@
 
     let koData;
     if (ks.mode === "auto") {
-      if (ks.qualifiers.length !== 8) { ks.error = "Automatik geht nur mit genau 8 Spielern."; render(); return; }
+      if (ks.qualifiers.length !== 6 && ks.qualifiers.length !== 8) { ks.error = "Automatik geht mit genau 6 oder 8 Spielern."; render(); return; }
       const standings = computeStandings("gesamt").filter((s) => ks.qualifiers.indexOf(s.player.id) >= 0);
-      if (standings.length !== 8) { ks.error = "Automatik braucht 8 platzierte Spieler."; render(); return; }
+      if (standings.length !== ks.qualifiers.length) { ks.error = "Die ausgewählten Spieler konnten nicht vollständig aus der Tabelle übernommen werden."; render(); return; }
       koData = buildKoPhase(standings);
     } else {
       // Manual: every qualifier must be placed into exactly one pairing (or a bye).
@@ -1278,7 +1322,7 @@
     const match = round.matches.find((x) => x.id === state.activeKoMatchId);
     match.legsA = f.legsA; match.legsB = f.legsB; match.status = "beendet";
     match.winnerId = f.legsA > f.legsB ? match.playerAId : match.playerBId;
-    const updated = advanceKoPhase({ seeds: t.seeds, rounds, manual: t.manual });
+    const updated = advanceKoPhase({ seeds: t.seeds, rounds, manual: t.manual, koFormat: t.koFormat });
     db.collection("koPhase").doc(t.id).update(updated)
       .then(() => {
         state.toast = updated.status === "beendet" ? "KO-Phase beendet – Sieger steht fest!" : "Ergebnis gespeichert";
@@ -1288,6 +1332,25 @@
       .catch((e) => { state.saveError = "Ergebnis konnte nicht gespeichert werden: " + e.message; render(); });
     state.modal = null;
     render();
+  };
+
+  window.openConfirmResetKo = function () {
+    if (!state.isAdmin || !currentKoPhase()) return;
+    state.modal = "confirmResetKo";
+    render();
+  };
+  window.confirmResetKo = function () {
+    if (!state.isAdmin || !db) return;
+    const t = currentKoPhase();
+    if (!t) { state.modal = null; render(); return; }
+    db.collection("koPhase").doc(t.id).delete()
+      .then(() => {
+        state.modal = null;
+        state.toast = "KO-Phase zurückgesetzt";
+        render();
+        setTimeout(() => { state.toast = ""; render(); }, 2400);
+      })
+      .catch((e) => { state.saveError = "KO-Phase konnte nicht zurückgesetzt werden: " + e.message; render(); });
   };
 
   window.deleteKoMatch = function (roundIndex, matchId) {
@@ -1658,6 +1721,7 @@
         <div class="display" style="font-size:16px;font-weight:600;margin-bottom:12px;">🏆 KO-Phase</div>
         ${koPhase.status === "beendet" ? `<div class="card" style="text-align:center;padding:16px;margin-bottom:16px;border-color:var(--gold);"><div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">KO-Phase Sieger</div><div class="display" style="font-size:20px;font-weight:600;color:var(--gold);">🏆 ${esc(playerName(koPhase.winnerId))}</div></div>` : ""}
         ${renderKoBracket(koPhase, false)}
+        ${state.isAdmin ? `<button class="press btn-panel row center" style="width:100%;gap:6px;padding:9px;font-size:13px;margin-top:12px;color:var(--red);border-color:rgba(220,70,70,.35);" onclick="openConfirmResetKo()">${iconTrash(14, "var(--red)")} KO-Phase zurücksetzen</button>` : ""}
       </div>
     `;
   }
@@ -1931,6 +1995,7 @@
     if (state.modal === "newTournament") return renderNewTournamentModal();
     if (state.modal === "tournamentResult") return renderTournamentResultModal();
     if (state.modal === "confirmKo") return renderConfirmKoModal();
+    if (state.modal === "confirmResetKo") return renderConfirmResetKoModal();
     if (state.modal === "koSetup") return renderKoSetupModal();
     if (state.modal === "koResult") return renderKoResultModal();
     if (state.modal === "home") return renderHomeModal();
@@ -2164,9 +2229,18 @@
   }
 
   function renderConfirmKoModal() {
-    const body = `<p style="color:var(--cream-dim);font-size:14px;margin:0;">Platz 1–2 gehen direkt ins Halbfinale. Platz 3–6 spielen die Ausspielung (3 gegen 6, 4 gegen 5). Platz 7–8 scheiden aus. Das lässt sich danach nicht mehr rückgängig machen.</p>`;
+    const koCount = computeStandings("gesamt").length;
+    const body = koCount === 6
+      ? `<p style="color:var(--cream-dim);font-size:14px;margin:0;">Bei 6 Spielern gehen Platz 1–2 direkt ins Viertelfinale. Platz 3–6 spielen 3 gegen 6 und 4 gegen 5. Die Sieger spielen anschließend gegen Platz 1 und 2. Die KO-Phase kann über „KO-Phase zurücksetzen“ wieder vollständig entfernt werden.</p>`
+      : `<p style="color:var(--cream-dim);font-size:14px;margin:0;">Platz 1–2 gehen direkt ins Halbfinale. Platz 3–6 spielen die Ausspielung (3 gegen 6, 4 gegen 5). Platz 7–8 scheiden aus. Die KO-Phase kann über „KO-Phase zurücksetzen“ wieder vollständig entfernt werden.</p>`;
     const footer = `<button class="press btn-gold" style="flex:1;padding:10px;font-size:14px;font-weight:600;" onclick="openKoSetup()">KO-Phase starten</button>`;
     return modalShell("KO-Phase starten?", body, footer);
+  }
+
+  function renderConfirmResetKoModal() {
+    const body = `<p style="color:var(--cream-dim);font-size:14px;margin:0;">Die komplette aktuelle KO-Phase inklusive Paarungen und bereits eingetragener Ergebnisse wird gelöscht. Die Ligatabelle und die normalen Ligaspiele bleiben unverändert. Danach kannst du die KO-Phase neu starten.</p>`;
+    const footer = `<button class="press" style="flex:1;padding:10px;font-size:14px;font-weight:600;background:var(--red);color:#fff;border-radius:10px;" onclick="confirmResetKo()">KO-Phase zurücksetzen</button>`;
+    return modalShell("KO-Phase zurücksetzen?", body, footer);
   }
 
   function renderKoSetupModal() {
@@ -2195,15 +2269,18 @@
     }
 
     // step === "pairs"
-    const canAuto = ks.qualifiers.length === 8;
-    const modeToggle = `
-      <div class="row" style="gap:8px;margin-bottom:14px;">
+    const canAuto = ks.qualifiers.length === 6 || ks.qualifiers.length === 8;
+    const fixedSix = ks.qualifiers.length === 6;
+    if (fixedSix) ks.mode = "auto";
+    const modeToggle = fixedSix
+      ? `<div style="color:var(--gold);font-size:12px;font-weight:600;background:rgba(203,161,53,0.10);border:1px solid rgba(203,161,53,0.35);border-radius:10px;padding:9px 12px;margin-bottom:14px;">6-Spieler-Modus · feste Paarungen nach Tabelle</div>`
+      : `<div class="row" style="gap:8px;margin-bottom:14px;">
         ${canAuto ? `<button class="press" style="flex:1;padding:9px;font-size:13px;font-weight:600;border-radius:10px;background:${ks.mode === "auto" ? "var(--gold)" : "var(--bg-soft)"};color:${ks.mode === "auto" ? "#241C05" : "var(--cream-dim)"};border:1px solid ${ks.mode === "auto" ? "var(--gold)" : "var(--panel-border)"};" onclick="setKoSetupMode('auto')">Automatik (Tabelle)</button>` : ""}
         <button class="press" style="flex:1;padding:9px;font-size:13px;font-weight:600;border-radius:10px;background:${ks.mode === "manual" ? "var(--gold)" : "var(--bg-soft)"};color:${ks.mode === "manual" ? "#241C05" : "var(--cream-dim)"};border:1px solid ${ks.mode === "manual" ? "var(--gold)" : "var(--panel-border)"};" onclick="setKoSetupMode('manual')">Paarungen selbst</button>
       </div>`;
 
     let inner;
-    if (ks.mode === "auto") {
+    if (ks.mode === "auto" || fixedSix) {
       inner = `<div style="color:var(--cream-dim);font-size:13px;line-height:1.5;background:var(--bg-soft);border-radius:10px;padding:12px;">Platz 1–2 gehen direkt ins Halbfinale. Platz 3–6 spielen die Ausspielung (3 gegen 6, 4 gegen 5). Die Sieger treffen im Halbfinale auf Platz 1 & 2.</div>`;
     } else {
       const used = new Set(); ks.pairs.forEach((p) => { used.add(p.a); if (p.b) used.add(p.b); });
