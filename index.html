@@ -143,7 +143,7 @@
     renameLeagueName: "",
     activeKoRoundIndex: null,
     activeKoMatchId: null,
-    koResultForm: { legsA: 0, legsB: 0 },
+    koResultForm: { legsA: 0, legsB: 0, checkoutA: "", checkoutB: "", avgA: "", avgB: "" },
     introPlayerAId: null,
     introPlayerBId: null,
     introOnDone: null,
@@ -395,6 +395,45 @@
   }
   function leagueIdForMatch(m) { return m.leagueId || bootstrapLeagueId(); }
   function matchesForLeague(leagueId) { return state.matches.filter((m) => leagueIdForMatch(m) === leagueId); }
+
+  // KO matches for this league. Their statistics belong to the same personal league stats.
+  function koMatchesForLeague(leagueId) {
+    const ko = state.koPhases.find((k) => k.id === leagueId);
+    if (!ko || !Array.isArray(ko.rounds)) return [];
+    const out = [];
+    ko.rounds.forEach((round, roundIndex) => {
+      (round.matches || []).forEach((m) => {
+        if (m.status === "beendet" && m.playerAId && m.playerBId) {
+          out.push({ ...m, koRound: round.name || koRoundName(round.matches.length), koRoundIndex: roundIndex });
+        }
+      });
+    });
+    return out;
+  }
+
+  // Complete personal competition statistics: league + KO phase through the final.
+  function computeCompetitionPlayerStats(playerId, leagueId) {
+    const leagueMatches = leagueId ? matchesForLeague(leagueId).filter((m) => m.status === "beendet") : [];
+    const koMatches = leagueId ? koMatchesForLeague(leagueId) : [];
+    const all = leagueMatches.concat(koMatches);
+    let played = 0, wins = 0, losses = 0, legsFor = 0, legsAgainst = 0;
+    let maxCheckout = null, avgSum = 0, avgCount = 0, koPlayed = 0, koWins = 0, koLosses = 0;
+    all.forEach((m) => {
+      if (m.playerAId !== playerId && m.playerBId !== playerId) return;
+      played++;
+      const isA = m.playerAId === playerId;
+      const my = Number(isA ? m.legsA : m.legsB);
+      const opp = Number(isA ? m.legsB : m.legsA);
+      legsFor += my; legsAgainst += opp;
+      if (my > opp) wins++; else if (opp > my) losses++;
+      if (m.koRound) { koPlayed++; if (my > opp) koWins++; else if (opp > my) koLosses++; }
+      const co = isA ? m.checkoutA : m.checkoutB;
+      const avg = isA ? m.avgA : m.avgB;
+      if (co != null && co !== "" && !isNaN(Number(co))) { const n = Number(co); if (maxCheckout === null || n > maxCheckout) maxCheckout = n; }
+      if (avg != null && avg !== "" && !isNaN(Number(avg))) { avgSum += Number(avg); avgCount++; }
+    });
+    return { played, wins, losses, legsFor, legsAgainst, maxCheckout, avgAverage: avgCount ? avgSum / avgCount : null, koPlayed, koWins, koLosses };
+  }
   function currentKoPhase() {
     const lg = activeLeague();
     if (!lg) return null;
@@ -658,26 +697,44 @@
       .forEach((m) => {
         played++;
         const isA = m.playerAId === playerId;
-        const my = isA ? m.legsA : m.legsB;
-        const opp = isA ? m.legsB : m.legsA;
+        const my = Number(isA ? m.legsA : m.legsB), opp = Number(isA ? m.legsB : m.legsA);
         const oppId = isA ? m.playerBId : m.playerAId;
         legsFor += my; legsAgainst += opp;
         if (!headToHead[oppId]) headToHead[oppId] = { wins: 0, losses: 0, legsFor: 0, legsAgainst: 0 };
-        headToHead[oppId].legsFor += my;
-        headToHead[oppId].legsAgainst += opp;
-        if (my > opp) { wins++; headToHead[oppId].wins++; }
-        else if (opp > my) { losses++; headToHead[oppId].losses++; }
+        headToHead[oppId].legsFor += my; headToHead[oppId].legsAgainst += opp;
+        if (my > opp) { wins++; headToHead[oppId].wins++; } else if (opp > my) { losses++; headToHead[oppId].losses++; }
       });
+
     let maxCheckout = null, avgSum = 0, avgCount = 0;
     scopedMatches
-      .filter((m) => m.status === "beendet" && (m.playerAId === playerId || m.playerBId === playerId))
+      .filter((m) => m.status === "beendet" && (m.playerAId === playerId || m.playerBId === playerId) && (roundFilter === "gesamt" || (m.round || "Hinrunde") === roundFilter))
       .forEach((m) => {
         const isA = m.playerAId === playerId;
-        const co = isA ? m.checkoutA : m.checkoutB;
-        const avg = isA ? m.avgA : m.avgB;
-        if (co !== null && co !== undefined && co !== "" && !isNaN(co)) { const n = Number(co); if (maxCheckout === null || n > maxCheckout) maxCheckout = n; }
-        if (avg !== null && avg !== undefined && avg !== "" && !isNaN(avg)) { avgSum += Number(avg); avgCount++; }
+        const co = isA ? m.checkoutA : m.checkoutB, avg = isA ? m.avgA : m.avgB;
+        if (co != null && co !== "" && !isNaN(Number(co))) { const n = Number(co); if (maxCheckout === null || n > maxCheckout) maxCheckout = n; }
+        if (avg != null && avg !== "" && !isNaN(Number(avg))) { avgSum += Number(avg); avgCount++; }
       });
+
+    // Gesamtansicht includes all completed KO matches, including the final when it is played.
+    if (roundFilter === "gesamt" && lg) {
+      const koStats = computeCompetitionPlayerStats(playerId, lg.id);
+      played = koStats.played; wins = koStats.wins; losses = koStats.losses; legsFor = koStats.legsFor; legsAgainst = koStats.legsAgainst;
+      maxCheckout = koStats.maxCheckout; avgSum = 0; avgCount = 0;
+      matchesForLeague(lg.id).filter((m) => m.status === "beendet" && (m.playerAId === playerId || m.playerBId === playerId))
+        .concat(koMatchesForLeague(lg.id).filter((m) => m.playerAId === playerId || m.playerBId === playerId))
+        .forEach((m) => {
+          const isA = m.playerAId === playerId, avg = isA ? m.avgA : m.avgB;
+          if (avg != null && avg !== "" && !isNaN(Number(avg))) { avgSum += Number(avg); avgCount++; }
+        });
+      koMatchesForLeague(lg.id).filter((m) => m.playerAId === playerId || m.playerBId === playerId).forEach((m) => {
+        const isA = m.playerAId === playerId;
+        const my = Number(isA ? m.legsA : m.legsB), opp = Number(isA ? m.legsB : m.legsA);
+        const oppId = isA ? m.playerBId : m.playerAId;
+        if (!headToHead[oppId]) headToHead[oppId] = { wins: 0, losses: 0, legsFor: 0, legsAgainst: 0 };
+        headToHead[oppId].legsFor += my; headToHead[oppId].legsAgainst += opp;
+        if (my > opp) headToHead[oppId].wins++; else if (opp > my) headToHead[oppId].losses++;
+      });
+    }
     return { played, wins, losses, legsFor, legsAgainst, headToHead, maxCheckout, avgAverage: avgCount ? avgSum / avgCount : null };
   }
 
@@ -1294,7 +1351,7 @@
     if (!m) return;
     state.activeKoRoundIndex = roundIndex;
     state.activeKoMatchId = matchId;
-    state.koResultForm = { legsA: m.legsA == null ? 0 : m.legsA, legsB: m.legsB == null ? 0 : m.legsB };
+    state.koResultForm = { legsA: m.legsA == null ? 0 : m.legsA, legsB: m.legsB == null ? 0 : m.legsB, checkoutA: m.checkoutA != null ? String(m.checkoutA) : "", checkoutB: m.checkoutB != null ? String(m.checkoutB) : "", avgA: m.avgA != null ? String(m.avgA) : "", avgB: m.avgB != null ? String(m.avgB) : "" };
     state.modal = "koResult";
     render();
   }
@@ -1320,7 +1377,10 @@
     const rounds = JSON.parse(JSON.stringify(t.rounds));
     const round = rounds[state.activeKoRoundIndex];
     const match = round.matches.find((x) => x.id === state.activeKoMatchId);
-    match.legsA = f.legsA; match.legsB = f.legsB; match.status = "beendet";
+    match.legsA = f.legsA; match.legsB = f.legsB;
+    match.checkoutA = f.checkoutA === "" ? null : Number(f.checkoutA); match.checkoutB = f.checkoutB === "" ? null : Number(f.checkoutB);
+    match.avgA = f.avgA === "" ? null : Number(f.avgA); match.avgB = f.avgB === "" ? null : Number(f.avgB);
+    match.status = "beendet";
     match.winnerId = f.legsA > f.legsB ? match.playerAId : match.playerBId;
     const updated = advanceKoPhase({ seeds: t.seeds, rounds, manual: t.manual, koFormat: t.koFormat });
     db.collection("koPhase").doc(t.id).update(updated)
@@ -1626,32 +1686,20 @@
 
   function koMatchCardHTML(m, roundIndex) {
     const isBye = m.playerBId === null || m.playerBId === undefined;
-    if (isBye) {
-      return `<div class="card" style="padding:12px 14px;">
-        <div class="row" style="gap:8px;align-items:center;">
-          <span style="flex:1;min-width:0;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;color:var(--gold);">${esc(playerName(m.playerAId))}</span>
-          <span style="color:var(--gold);font-size:11px;flex-shrink:0;">Freilos ✓</span>
-        </div>
-      </div>`;
-    }
-    const isDone = m.status === "beendet";
-    const aWon = isDone && m.legsA > m.legsB;
-    const bWon = isDone && m.legsB > m.legsA;
+    const pa = state.players.find((p) => p.id === m.playerAId) || { id: m.playerAId, name: playerName(m.playerAId), photo: null };
+    const pb = !isBye ? (state.players.find((p) => p.id === m.playerBId) || { id: m.playerBId, name: playerName(m.playerBId), photo: null }) : null;
+    if (isBye) return `<div class="card" style="padding:10px 12px;"><div class="row" style="gap:8px;align-items:center;">${avatarHTML(pa,30)}<span style="flex:1;min-width:0;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;color:var(--gold);">${esc(pa.name)}</span><span style="color:var(--gold);font-size:11px;">Freilos ✓</span></div></div>`;
+    const isDone = m.status === "beendet", aWon = isDone && m.legsA > m.legsB, bWon = isDone && m.legsB > m.legsA;
     const showResultBtn = !isDone || state.isAdmin;
-    return `<div class="card" style="padding:12px 14px;">
-      <div class="row" style="gap:8px;">
-        <span style="flex:1;min-width:0;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:${aWon ? 600 : 500};color:${aWon ? "var(--gold)" : "var(--cream)"}">${esc(playerName(m.playerAId))}</span>
-        ${isDone
-          ? `<span class="mono" style="font-size:14px;font-weight:700;padding:0 8px;flex-shrink:0;">${m.legsA}–${m.legsB}</span>`
-          : `<span style="color:var(--muted);font-size:12px;padding:0 8px;flex-shrink:0;">vs</span>`}
-        <span style="flex:1;min-width:0;font-size:14px;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:${bWon ? 600 : 500};color:${bWon ? "var(--gold)" : "var(--cream)"}">${esc(playerName(m.playerBId))}</span>
+    const hasStats = isDone && (m.checkoutA != null || m.checkoutB != null || m.avgA != null || m.avgB != null);
+    return `<div class="card" style="padding:10px 12px;">
+      <div class="row" style="gap:7px;align-items:center;">
+        ${avatarHTML(pa,30)}<span style="flex:1;min-width:0;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:${aWon?600:500};color:${aWon?"var(--gold)":"var(--cream)"}">${esc(pa.name)}</span>
+        ${isDone?`<span class="mono" style="font-size:14px;font-weight:700;padding:0 5px;flex-shrink:0;">${m.legsA}–${m.legsB}</span>`:`<span style="color:var(--muted);font-size:11px;padding:0 5px;">vs</span>`}
+        <span style="flex:1;min-width:0;text-align:right;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:${bWon?600:500};color:${bWon?"var(--gold)":"var(--cream)"}">${esc(pb.name)}</span>${avatarHTML(pb,30)}
       </div>
-      ${showResultBtn || state.isAdmin ? `<div class="row" style="gap:6px;margin-top:8px;justify-content:center;">
-        ${showResultBtn ? `<button class="press row" style="gap:4px;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:500;background:${isDone ? "transparent" : "var(--gold)"};color:${isDone ? "var(--muted)" : "#241C05"};display:inline-flex;" onclick="openKoResult(${roundIndex},'${m.id}')">
-          ${isDone ? iconPencil(12, "var(--muted)") : iconTarget(12, "#241C05")} ${isDone ? "Bearbeiten" : "Ergebnis"}
-        </button>` : ""}
-        ${state.isAdmin && isDone ? `<button class="press icon-btn" style="background:${state.confirmDeleteKoMatchKey === (roundIndex + ":" + m.id) ? "var(--red)" : "var(--bg-soft)"};" onclick="deleteKoMatch(${roundIndex},'${m.id}')">${iconTrash(13, state.confirmDeleteKoMatchKey === (roundIndex + ":" + m.id) ? "#fff" : "var(--muted)")}</button>` : ""}
-      </div>` : ""}
+      ${hasStats?`<div class="mono" style="color:var(--muted);font-size:10px;margin-top:6px;text-align:center;">Ø ${m.avgA!=null?Number(m.avgA).toFixed(1):"–"} · CO ${m.checkoutA!=null?m.checkoutA:"–"} &nbsp;—&nbsp; Ø ${m.avgB!=null?Number(m.avgB).toFixed(1):"–"} · CO ${m.checkoutB!=null?m.checkoutB:"–"}</div>`:""}
+      ${showResultBtn||state.isAdmin?`<div class="row" style="gap:6px;margin-top:8px;justify-content:center;">${showResultBtn?`<button class="press row" style="gap:4px;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:500;background:${isDone?"transparent":"var(--gold)"};color:${isDone?"var(--muted)":"#241C05"};display:inline-flex;" onclick="openKoResult(${roundIndex},'${m.id}')">${isDone?iconPencil(12,"var(--muted)"):iconTarget(12,"#241C05")} ${isDone?"Bearbeiten":"Ergebnis"}</button>`:""}${state.isAdmin&&isDone?`<button class="press icon-btn" style="background:${state.confirmDeleteKoMatchKey===(roundIndex+":"+m.id)?"var(--red)":"var(--bg-soft)"};" onclick="deleteKoMatch(${roundIndex},'${m.id}')">${iconTrash(13,state.confirmDeleteKoMatchKey===(roundIndex+":"+m.id)?"#fff":"var(--muted)")}</button>`:""}</div>`:""}
     </div>`;
   }
 
@@ -1694,6 +1742,14 @@
     return html;
   }
 
+  function competitionStatsHTML(leagueId, compact) {
+    const lg = state.leagues.find((l) => l.id === leagueId); if (!lg) return "";
+    const rows = leagueParticipants(lg).map((p) => ({ player:p, ...computeCompetitionPlayerStats(p.id, leagueId) }))
+      .filter((x) => x.played > 0 || x.avgAverage != null || x.maxCheckout != null);
+    if (!rows.length) return "";
+    return `<div style="${compact?"margin-top:18px;":"margin-top:24px;"}"><div class="display" style="font-size:16px;font-weight:600;margin-bottom:4px;">📊 Liga-Gesamtstatistik</div><div style="color:var(--muted);font-size:10px;margin-bottom:10px;">Ligaspiele + KO-Phase · wird bis zum Finale fortgeführt</div><div class="col" style="gap:6px;">${rows.map((r)=>`<div class="card row" style="gap:9px;padding:9px 10px;">${avatarHTML(r.player,32)}<div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(r.player.name)}</div><div class="mono" style="color:var(--muted);font-size:10px;margin-top:2px;">${r.played} Sp · ${r.wins}S–${r.losses}N · Legs ${r.legsFor}:${r.legsAgainst}${r.koPlayed?` · KO ${r.koWins}S–${r.koLosses}N`:""}</div></div><div style="text-align:right;min-width:74px;"><div class="mono" style="color:var(--gold);font-size:12px;font-weight:700;">Ø ${r.avgAverage!=null?r.avgAverage.toFixed(1):"–"}</div><div class="mono" style="color:var(--cream-dim);font-size:10px;margin-top:2px;">CO ${r.maxCheckout!=null?r.maxCheckout:"–"}</div></div></div>`).join("")}</div></div>`;
+  }
+
   function renderKoPhaseSection() {
     if (state.standingsRound !== "gesamt") return "";
     const koPhase = currentKoPhase();
@@ -1721,6 +1777,7 @@
         <div class="display" style="font-size:16px;font-weight:600;margin-bottom:12px;">🏆 KO-Phase</div>
         ${koPhase.status === "beendet" ? `<div class="card" style="text-align:center;padding:16px;margin-bottom:16px;border-color:var(--gold);"><div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">KO-Phase Sieger</div><div class="display" style="font-size:20px;font-weight:600;color:var(--gold);">🏆 ${esc(playerName(koPhase.winnerId))}</div></div>` : ""}
         ${renderKoBracket(koPhase, false)}
+        ${competitionStatsHTML(lg.id, false)}
         ${state.isAdmin ? `<button class="press btn-panel row center" style="width:100%;gap:6px;padding:9px;font-size:13px;margin-top:12px;color:var(--red);border-color:rgba(220,70,70,.35);" onclick="openConfirmResetKo()">${iconTrash(14, "var(--red)")} KO-Phase zurücksetzen</button>` : ""}
       </div>
     `;
@@ -2281,7 +2338,7 @@
 
     let inner;
     if (ks.mode === "auto" || fixedSix) {
-      inner = `<div style="color:var(--cream-dim);font-size:13px;line-height:1.5;background:var(--bg-soft);border-radius:10px;padding:12px;">Platz 1–2 gehen direkt ins Halbfinale. Platz 3–6 spielen die Ausspielung (3 gegen 6, 4 gegen 5). Die Sieger treffen im Halbfinale auf Platz 1 & 2.</div>`;
+      inner = `<div style="color:var(--cream-dim);font-size:13px;line-height:1.5;background:var(--bg-soft);border-radius:10px;padding:12px;">Platz 1–2 gehen direkt ins Viertelfinale. Platz 3–6 spielen die Ausspielung (3 gegen 6, 4 gegen 5). Die beiden Sieger treffen im Viertelfinale auf Platz 2 bzw. Platz 1.</div>`;
     } else {
       const used = new Set(); ks.pairs.forEach((p) => { used.add(p.a); if (p.b) used.add(p.b); });
       const remaining = ks.qualifiers.filter((id) => !used.has(id));
@@ -2313,20 +2370,19 @@
   }
 
   function renderKoResultModal() {
-    const t = currentKoPhase();
-    if (!t) return "";
-    const m = t.rounds[state.activeKoRoundIndex].matches.find((x) => x.id === state.activeKoMatchId);
+    const t = currentKoPhase(); if (!t) return "";
+    const round = t.rounds[state.activeKoRoundIndex];
+    const m = round ? round.matches.find((x) => x.id === state.activeKoMatchId) : null;
     if (!m) return "";
-    const f = state.koResultForm;
-    const canSubmit = f.legsA !== f.legsB;
-    const body = `<div class="row" style="gap:12px;align-items:center;">
-        ${legStepperHTML(playerName(m.playerAId), f.legsA, "stepKoResult('a',-1)", "stepKoResult('a',1)")}
-        <span style="color:var(--muted);font-size:13px;font-weight:500;">Legs</span>
-        ${legStepperHTML(playerName(m.playerBId), f.legsB, "stepKoResult('b',-1)", "stepKoResult('b',1)")}
-      </div>
-      ${!canSubmit ? `<div style="color:var(--red);font-size:12px;text-align:center;margin-top:12px;">Unentschieden ist nicht möglich — ein Spieler muss mehr Legs haben.</div>` : ""}`;
-    const footer = `<button class="press btn-gold row center" style="flex:1;gap:6px;padding:10px;font-size:14px;font-weight:600;${canSubmit ? "" : "opacity:.4;pointer-events:none;"}" onclick="confirmKoResult()">${iconCheck(16, "#241C05")} Speichern</button>`;
-    return modalShell("Ergebnis eintragen", body, footer);
+    const f = state.koResultForm, canSubmit = f.legsA !== f.legsB;
+    const body = `<div class="row" style="gap:12px;align-items:center;">${legStepperHTML(playerName(m.playerAId),f.legsA,"stepKoResult('a',-1)","stepKoResult('a',1)")}<span style="color:var(--muted);font-size:13px;font-weight:500;">Legs</span>${legStepperHTML(playerName(m.playerBId),f.legsB,"stepKoResult('b',-1)","stepKoResult('b',1)")}</div>
+      ${!canSubmit?`<div style="color:var(--red);font-size:12px;text-align:center;margin-top:12px;">Unentschieden ist nicht möglich — ein Spieler muss mehr Legs haben.</div>`:""}
+      <div style="color:var(--muted);font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.05em;margin:16px 0 8px;">Match-Statistik</div>
+      <div class="row" style="gap:10px;"><div style="flex:1;"><div style="color:var(--muted);font-size:10px;margin-bottom:4px;">${esc(playerName(m.playerAId))} · CO</div><input class="field-input" type="number" inputmode="numeric" placeholder="z.B. 121" value="${esc(f.checkoutA||"")}" oninput="state.koResultForm.checkoutA=this.value"></div><div style="flex:1;"><div style="color:var(--muted);font-size:10px;margin-bottom:4px;">${esc(playerName(m.playerBId))} · CO</div><input class="field-input" type="number" inputmode="numeric" placeholder="z.B. 121" value="${esc(f.checkoutB||"")}" oninput="state.koResultForm.checkoutB=this.value"></div></div>
+      <div class="row" style="gap:10px;margin-top:8px;"><div style="flex:1;"><div style="color:var(--muted);font-size:10px;margin-bottom:4px;">${esc(playerName(m.playerAId))} · Ø Average</div><input class="field-input" type="number" step="0.01" inputmode="decimal" placeholder="z.B. 55.3" value="${esc(f.avgA||"")}" oninput="state.koResultForm.avgA=this.value"></div><div style="flex:1;"><div style="color:var(--muted);font-size:10px;margin-bottom:4px;">${esc(playerName(m.playerBId))} · Ø Average</div><input class="field-input" type="number" step="0.01" inputmode="decimal" placeholder="z.B. 55.3" value="${esc(f.avgB||"")}" oninput="state.koResultForm.avgB=this.value"></div></div>
+      <div style="color:var(--muted);font-size:10px;text-align:center;margin-top:10px;">Average und höchster CO werden in die persönliche Liga-Gesamtstatistik übernommen.</div>`;
+    const footer = `<button class="press btn-gold row center" style="flex:1;gap:6px;padding:10px;font-size:14px;font-weight:600;${canSubmit?"":"opacity:.4;pointer-events:none;"}" onclick="confirmKoResult()">${iconCheck(16,"#241C05")} Speichern</button>`;
+    return modalShell("KO-Ergebnis eintragen",body,footer);
   }
 
   function renderHomeModal() {
@@ -2442,7 +2498,7 @@
 
   function leagueStatLeaders(standings, leagueId) {
     // Highest single checkout across the league, and highest per-player mean average.
-    const scoped = leagueId ? matchesForLeague(leagueId).filter((m) => m.status === "beendet") : [];
+    const scoped = leagueId ? matchesForLeague(leagueId).filter((m) => m.status === "beendet").concat(koMatchesForLeague(leagueId)) : [];
     let bestCO = null, bestCOplayer = null;
     const avgAcc = {}; // pid -> { sum, count }
     scoped.forEach((m) => {
@@ -2510,6 +2566,7 @@
       ${koPhase ? `
         <div style="color:var(--muted);font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.03em;margin-bottom:8px;">KO-Phase</div>
         ${renderKoBracket(koPhase, true)}
+        ${competitionStatsHTML(lg.id, true)}
       ` : ""}
       ${state.isAdmin ? `<button class="press btn-gold row center" style="width:100%;gap:6px;padding:10px;font-size:14px;margin-top:20px;" onclick="openConfirmSwitchLeague('${lg.id}')">${iconBracket(16, "#241C05")} ${lg.status === "archiviert" ? "Liga reaktivieren" : "Zu dieser Liga wechseln"}</button>` : ""}
     `;
