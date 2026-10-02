@@ -164,6 +164,38 @@
   .linkcard { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; font-size: 14px; }
   .linkcard span:last-child { color: var(--blue); font-size: 22px; line-height: 1; }
 
+  /* Ticker effects: leg win (subtle), 180 (confetti), match win (winner card) */
+  .pl.legwin { border-color: var(--green); box-shadow: 0 0 0 4px rgba(34,197,94,.2); }
+  .pl.legwin:not(.hold) { animation: legflash 1s ease-out; }
+  .pl.legwin .pl-turn { color: var(--green); }
+  .pl.legwin:not(.hold) .pl-legs { animation: pop .55s cubic-bezier(.2,1.6,.4,1); }
+  @keyframes legflash { 0% { box-shadow: 0 0 0 0 rgba(34,197,94,.75); } 70% { box-shadow: 0 0 0 16px rgba(34,197,94,0); } 100% { box-shadow: 0 0 0 4px rgba(34,197,94,.2); } }
+  @keyframes pop { 0% { transform: scale(1); } 45% { transform: scale(1.35); } 100% { transform: scale(1); } }
+  .tr-rem.fin { background: rgba(34,197,94,.22); color: #86efac; }
+  .pl.win { border-color: var(--gold); box-shadow: 0 0 0 4px rgba(245,197,66,.18); }
+  .pl.win .pl-turn { color: var(--gold); }
+  .pl.lose { opacity: .72; }
+  .victory { text-align: center; padding: 22px 14px 18px; border-radius: 22px; border: 2px solid rgba(245,197,66,.65);
+    background: radial-gradient(420px 220px at 50% 0%, rgba(245,197,66,.20), transparent 70%), var(--card); }
+  .victory.vic-in { animation: vic-in .8s cubic-bezier(.2,1.25,.3,1) both; }
+  .victory .ava { display: flex; margin: 0 auto 10px; border: 3px solid var(--gold); box-shadow: 0 0 0 7px rgba(245,197,66,.16), 0 8px 30px rgba(245,197,66,.25); }
+  .vic-label { font-size: 12px; font-weight: 800; letter-spacing: .35em; color: var(--gold); text-transform: uppercase; }
+  .vic-name { font-family: var(--head); font-size: clamp(36px, 9vw, 56px); font-weight: 700; text-transform: uppercase; line-height: 1.05; }
+  .vic-score { font-family: var(--head); font-size: clamp(34px, 8vw, 48px); font-weight: 700; color: var(--gold); letter-spacing: .06em; }
+  .vic-vs { color: var(--dim); font-size: 14px; margin-bottom: 12px; }
+  @keyframes vic-in { 0% { opacity: 0; transform: scale(.82) translateY(14px); } 100% { opacity: 1; transform: none; } }
+  .fx-confetti { position: fixed; inset: 0; pointer-events: none; overflow: hidden; z-index: 60; }
+  .fx-confetti i { position: absolute; top: -24px; border-radius: 2px; opacity: 0; animation-name: confetti-fall; animation-timing-function: cubic-bezier(.25,.6,.4,1); animation-fill-mode: forwards; }
+  @keyframes confetti-fall { 0% { transform: translate3d(0,-20px,0) rotate(0deg); opacity: 1; } 85% { opacity: 1; } 100% { transform: translate3d(var(--dx), 105vh, 0) rotate(var(--rot)); opacity: 0; } }
+  .fx-banner { position: fixed; left: 0; right: 0; top: 26%; text-align: center; pointer-events: none; z-index: 61; animation: banner 1.9s ease-out forwards; }
+  .fx-banner b { display: block; font-family: var(--head); font-size: clamp(72px, 22vw, 150px); font-weight: 700; color: var(--gold); line-height: 1; text-shadow: 0 6px 40px rgba(245,197,66,.55), 0 2px 0 rgba(0,0,0,.4); }
+  .fx-banner span { display: block; font-family: var(--head); font-size: clamp(20px, 5vw, 32px); text-transform: uppercase; letter-spacing: .12em; }
+  @keyframes banner { 0% { opacity: 0; transform: scale(.4); } 18% { opacity: 1; transform: scale(1.12); } 30% { transform: scale(1); } 80% { opacity: 1; } 100% { opacity: 0; transform: scale(1.05) translateY(-20px); } }
+  @media (prefers-reduced-motion: reduce) {
+    .pl.legwin:not(.hold), .pl.legwin:not(.hold) .pl-legs, .victory.vic-in { animation: none !important; }
+    .fx-confetti, .fx-banner { display: none !important; }
+  }
+
   /* Wider screens: use the space */
   @media (min-width: 900px) {
     .wrap, .top-in { max-width: 1180px; }
@@ -211,6 +243,7 @@
     ready: { players: false, comps: false, matches: false, live: false },
     old: { loaded: false, leagues: [], matches: [], players: {}, ko: {}, error: "" },
     liveRecv: {}, liveLag: {},
+    fx: {}, fxSeen: {},   // ticker effects: running effects per match, highest turn number already seen
     error: "",
   };
 
@@ -224,6 +257,73 @@
     if (queued) return;
     queued = true;
     (typeof requestAnimationFrame === "function" ? requestAnimationFrame : setTimeout)(() => { queued = false; render(); });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Ticker effects
+  // ---------------------------------------------------------------------------
+  const reducedMotion = () => { try { return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches); } catch (e) { return false; } };
+
+  function confetti(count) {
+    if (reducedMotion() || !document.body) return;
+    const box = document.createElement("div");
+    box.className = "fx-confetti";
+    const colors = ["#f5c542", "#2f6bff", "#ffffff", "#22c55e", "#ff3b5c", "#7aa2ff"];
+    for (let i = 0; i < count; i++) {
+      const p = document.createElement("i");
+      const w = 6 + Math.random() * 6, h = 8 + Math.random() * 10;
+      p.style.cssText = `left:${(Math.random() * 100).toFixed(1)}%;width:${w.toFixed(0)}px;height:${h.toFixed(0)}px;background:${colors[i % colors.length]};animation-duration:${(1.9 + Math.random() * 1.6).toFixed(2)}s;animation-delay:${(Math.random() * 0.55).toFixed(2)}s;--dx:${((Math.random() * 2 - 1) * 140).toFixed(0)}px;--rot:${(Math.random() * 900 - 450).toFixed(0)}deg`;
+      box.appendChild(p);
+    }
+    document.body.appendChild(box);
+    setTimeout(() => { if (box.remove) box.remove(); }, 4500);
+  }
+
+  function banner(big, small) {
+    if (reducedMotion() || !document.body) return;
+    const el = document.createElement("div");
+    el.className = "fx-banner";
+    el.innerHTML = `<b>${esc(big)}</b><span>${esc(small || "")}</span>`;
+    document.body.appendChild(el);
+    setTimeout(() => { if (el.remove) el.remove(); }, 2100);
+  }
+
+  // A short-lived effect that the ticker view reads while rendering. The CSS animation must only run
+  // on the FIRST render after it started (every update re-renders the page), later renders show the
+  // static "hold" look until the effect expires.
+  function startFx(id, kind, p, ms) {
+    const f = (S.fx[id] = S.fx[id] || {});
+    f[kind] = { p, until: Date.now() + ms, animated: false };
+    setTimeout(() => { if (S.fx[id]) delete S.fx[id][kind]; scheduleRender(); }, ms + 60);
+  }
+
+  const maxTurnNo = (d) => (d.recent || []).reduce((m, t) => Math.max(m, Number(t.n) || 0), 0);
+
+  // Compares a new live document with the previous one and starts effects for what is NEW.
+  // Only while that very ticker is open; the first sight of a match only records its position.
+  function liveEffects(prev, d) {
+    const id = d.id, top = maxTurnNo(d);
+    const known = S.fxSeen[id] !== undefined;
+    const seen = known ? S.fxSeen[id] : top;
+    S.fxSeen[id] = Math.max(seen, top);
+    if (!known || !S.ready.live) return;
+    const r = parseRoute();
+    if (r.name !== "live" || r.id !== id) return;
+    const fresh = (d.recent || []).filter((t) => (Number(t.n) || 0) > seen).sort((a, b) => a.n - b.n);
+    const matchEnded = d.status === "beendet" && prev && prev.status === "laufend";
+    let did180 = false;
+    fresh.forEach((t) => {
+      const who = (d.players || [])[t.p];
+      if (t.pts === 180 && !did180) { did180 = true; banner("180!", who ? who.name : ""); confetti(48); }
+      if (t.rem === 0 && d.status === "laufend") startFx(id, "legwin", t.p, 3000);
+    });
+    if (matchEnded) {
+      const pl = d.players || [];
+      const w = Number((pl[0] || {}).legs) > Number((pl[1] || {}).legs) ? 0 : 1;
+      S.fx[id] = Object.assign(S.fx[id] || {}, { victoryAnim: true });
+      setTimeout(() => confetti(110), 350);
+      if (pl[w]) setTimeout(() => confetti(60), 1500);
+    }
   }
 
   let db = null;
@@ -247,6 +347,7 @@
       const prev = S.live; S.live = {};
       docs(s).forEach((d) => {
         S.live[d.id] = d;
+        try { liveEffects(prev[d.id], d); } catch (e) { /* effects are decoration: never break the ticker */ }
         // Transmission time: add-on wrote at updatedMs, we received it now (exact when both clocks agree, e.g. same PC).
         if (!prev[d.id] || prev[d.id].updatedMs !== d.updatedMs) { S.liveRecv[d.id] = Date.now(); S.liveLag[d.id] = Date.now() - Number(d.updatedMs); }
         else { S.liveRecv[d.id] = prev[d.id] && S.liveRecv[d.id] || Date.now(); }
@@ -513,28 +614,43 @@
     const chip = ended ? `<span class="tag">${d.status === "beendet" ? "Beendet" : "Abgebrochen"}</span>` : fresh ? `<span class="livechip"><i></i>LIVE</span>` : `<span class="tag">Pausiert</span>`;
     const f1 = (x) => (x == null ? "–" : Number(x).toFixed(1));
 
+    const fx = S.fx[d.id] || {};
+    const lw = (i) => !ended && !!(fx.legwin && fx.legwin.p === i && Date.now() < fx.legwin.until); // never together with the end of the match
+    const matchWon = d.status === "beendet" && pl.length === 2 && Number(pl[0].legs) !== Number(pl[1].legs);
+    const wIdx = matchWon ? (Number(pl[0].legs) > Number(pl[1].legs) ? 0 : 1) : -1;
+
     const panel = (p, i) => {
       const on = !!p.thrower && !ended;
       const turns = recent.filter((t) => t.p === i);
       const darts = on ? (d.darts || []) : [];
-      return `<section class="pl${on ? " on" : ""}">
-        <div class="pl-head">${avatar(p.id, 48)}<div class="pl-id"><div class="pl-name">${esc(p.name)}</div><div class="pl-turn">${on ? "am Wurf" : ""}</div></div><span class="pl-legs">${esc(p.legs)}</span></div>
+      const cls = (on ? " on" : "") + (lw(i) ? " legwin" + (fx.legwin.animated ? " hold" : "") : "") + (wIdx === i ? " win" : wIdx >= 0 ? " lose" : "");
+      const tag = wIdx === i ? "Sieger" : lw(i) ? "Leg gewonnen" : on ? "am Wurf" : "";
+      return `<section class="pl${cls}">
+        <div class="pl-head">${avatar(p.id, 48)}<div class="pl-id"><div class="pl-name">${esc(p.name)}</div><div class="pl-turn">${tag}</div></div><span class="pl-legs">${esc(p.legs)}</span></div>
         <div class="pl-rem">${esc(p.remaining)}</div>
         <div class="pl-stats"><span>Leg Ø <b>${f1(p.legAvg)}</b></span><span>Match Ø <b>${f1(p.avg)}</b></span>${p.legDarts != null ? `<span>🎯 <b>${esc(p.legDarts)}</b></span>` : ""}${Number(p.total180) > 0 ? `<span>180er <b>${esc(p.total180)}</b></span>` : ""}</div>
         <div class="darts">${on ? (darts.length ? darts.map((n) => `<span class="dart ${dartClass(n)}">${esc(n)}</span>`).join("") + `<span class="dart-sum">= ${esc(d.turnPoints)}</span>` : `<span class="muted">wirft gleich…</span>`) : ""}</div>
         <div class="tr-head"><span>Punkte</span><span>Rest</span></div>
-        <div class="tr-list">${turns.length ? turns.map((t) => `<div class="tr"><span class="tr-pts ${t.pts === 180 ? "max" : t.pts >= 100 ? "big" : t.pts === 0 ? "zero" : ""}">${esc(t.pts)}</span>${t.rem != null ? `<span class="tr-rem">${esc(t.rem)}</span>` : `<span></span>`}</div>`).join("") : `<div class="muted tr-empty">Noch keine Aufnahme</div>`}</div>
+        <div class="tr-list">${turns.length ? turns.map((t) => `<div class="tr"><span class="tr-pts ${t.pts === 180 ? "max" : t.pts >= 100 ? "big" : t.pts === 0 ? "zero" : ""}">${esc(t.pts)}</span>${t.rem != null ? `<span class="tr-rem${t.rem === 0 ? " fin" : ""}">${esc(t.rem)}</span>` : `<span></span>`}</div>`).join("") : `<div class="muted tr-empty">Noch keine Aufnahme</div>`}</div>
       </section>`;
     };
 
     let body = `<div class="tk-sub">${esc(d.competitionName || "")} · Leg ${esc(d.leg)} · 501 · Erster bis ${esc(d.legsToWin || "")} Legs · SI-DO</div>`;
-    if (ended) {
+    if (matchWon) {
+      const w = pl[wIdx], l = pl[1 - wIdx];
+      body += `<div class="victory${fx.victoryAnim ? " vic-in" : ""}">${avatar(w.id, 104)}
+        <div class="vic-label">Sieg</div><div class="vic-name">${esc(w.name)}</div>
+        <div class="vic-score">${esc(w.legs)} : ${esc(l.legs)}</div><div class="vic-vs">gegen ${esc(l.name)}</div>
+        ${back !== "#/" ? `<a class="btn" href="${back}">Zur Tabelle</a>` : ""}</div>`;
+    } else if (ended) {
       body += `<div class="final"><div class="muted">${d.status === "beendet" ? "Endstand" : "Match abgebrochen"}</div><b>${esc((pl[0] || {}).name)} ${esc((pl[0] || {}).legs)} : ${esc((pl[1] || {}).legs)} ${esc((pl[1] || {}).name)}</b>${back !== "#/" ? `<div style="margin-top:10px"><a class="btn" href="${back}">Zur Tabelle</a></div>` : ""}</div>`;
     } else if (!fresh) {
       const ageMin = Math.floor((Date.now() - (Number(d.updatedMs) || 0)) / 60000);
       body += `<div class="msg">Seit ${ageMin} Min. keine Daten – das Match ist unterbrochen oder beendet.</div>`;
     }
     body += `<div class="tk-board">${pl.map(panel).join("")}</div>`;
+    if (fx.legwin) fx.legwin.animated = true;
+    if (fx.victoryAnim) fx.victoryAnim = false;
     body += `<div class="tk-age muted center" id="tk-age">${esc(ageText(d))}</div>`;
     return shell(topbar(back, (pl[0] ? pl[0].name : "") + " vs " + (pl[1] ? pl[1].name : ""), chip), body);
   }
