@@ -115,31 +115,48 @@
   /* KO */
   .round-title { font-family: var(--head); font-size: 17px; font-weight: 700; text-transform: uppercase; color: var(--dim); margin: 6px 2px 0; }
 
-  /* Ticker */
-  .tk-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  /* Ticker – every player has his own field, like Autodarts */
   .tk-sub { color: var(--dim); font-size: 13px; text-align: center; }
-  .tk-board { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .pl { text-align: center; padding: 14px 8px 12px; border-radius: 20px; background: var(--card); border: 2px solid var(--line); position: relative; }
+  .tk-board { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .pl { display: flex; flex-direction: column; min-height: 0; padding: 14px 12px 12px; border-radius: 20px; background: var(--card); border: 2px solid var(--line); }
   .pl.on { border-color: var(--blue); box-shadow: 0 0 0 4px rgba(47,107,255,.18); }
-  .pl .ava { margin: 0 auto 6px; display: flex; }
-  .pl-name { font-family: var(--head); font-size: 20px; font-weight: 700; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .pl-turn { height: 16px; font-size: 10px; font-weight: 800; letter-spacing: .1em; color: var(--blue); text-transform: uppercase; }
-  .pl-rem { font-family: var(--head); font-size: 64px; font-weight: 700; line-height: 1; }
-  .pl-legs { position: absolute; top: 10px; right: 10px; min-width: 30px; height: 30px; border-radius: 9px; background: var(--blue); display: inline-flex; align-items: center; justify-content: center; font-weight: 800; font-size: 16px; }
-  .pl-stats { margin-top: 8px; color: var(--muted); font-size: 12px; display: flex; justify-content: center; gap: 10px; }
-  .pl-stats b { color: var(--dim); }
-  .darts { display: flex; gap: 8px; justify-content: center; align-items: center; min-height: 46px; flex-wrap: wrap; }
-  .dart { min-width: 54px; padding: 9px 10px; text-align: center; border-radius: 12px; background: #050b1f; border: 1px solid var(--line); font-family: var(--head); font-size: 20px; font-weight: 700; }
+  .pl-head { display: flex; align-items: center; gap: 10px; }
+  .pl-id { flex: 1; min-width: 0; }
+  .pl-name { font-family: var(--head); font-size: 22px; font-weight: 700; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.1; }
+  .pl-turn { font-size: 10px; font-weight: 800; letter-spacing: .1em; color: var(--blue); text-transform: uppercase; height: 13px; }
+  .pl-legs { min-width: 36px; height: 36px; border-radius: 10px; background: var(--blue); display: inline-flex; align-items: center; justify-content: center; font-weight: 800; font-size: 20px; }
+  .pl-rem { font-family: var(--head); font-size: clamp(64px, 13vw, 128px); font-weight: 700; line-height: 1; text-align: center; margin: 8px 0 4px; }
+  .pl.on .pl-rem { color: #fff; } .pl:not(.on) .pl-rem { color: var(--dim); }
+  .pl-stats { display: flex; justify-content: center; gap: 14px; flex-wrap: wrap; color: var(--muted); font-size: 13px; }
+  .pl-stats b { color: var(--text); font-weight: 700; }
+  .darts { display: flex; gap: 8px; justify-content: center; align-items: center; min-height: 54px; flex-wrap: wrap; margin: 10px 0 6px; }
+  .dart { min-width: 54px; padding: 8px 10px; text-align: center; border-radius: 12px; background: #050b1f; border: 1px solid var(--line); font-family: var(--head); font-size: 20px; font-weight: 700; }
   .dart.T { border-color: var(--blue); color: #9db9ff; } .dart.D { border-color: var(--green); color: #7ee2a3; } .dart.M { color: var(--muted); }
-  .dart-sum { font-family: var(--head); font-size: 24px; color: var(--dim); margin-left: 6px; }
-  .rt { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-  .rt span { padding: 7px 10px; border-radius: 10px; background: #050b1f; font-family: var(--head); font-size: 18px; font-weight: 600; color: var(--dim); }
-  .rt span.l { text-align: left; } .rt span.r { text-align: right; } .rt span.empty { background: transparent; }
-  .rt span.big { color: #9db9ff; } .rt span.max { color: var(--gold); }
+  .dart-sum { font-family: var(--head); font-size: 22px; color: var(--dim); margin-left: 4px; }
+  .tr-head { display: grid; grid-template-columns: 1fr 1fr; padding: 6px 4px; color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; border-top: 1px solid var(--line); text-align: center; }
+  .tr-list { display: flex; flex-direction: column; gap: 6px; padding-top: 4px; flex: 1; min-height: 0; overflow-y: auto; }
+  .tr { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: center; }
+  .tr-pts { text-align: center; font-family: var(--head); font-size: 24px; font-weight: 600; color: var(--dim); }
+  .tr-pts.big { color: #9db9ff; } .tr-pts.max { color: var(--gold); } .tr-pts.zero { color: var(--muted); }
+  .tr-rem { text-align: center; padding: 6px 4px; border-radius: 10px; background: rgba(255,255,255,.08); font-family: var(--head); font-size: 22px; font-weight: 600; }
+  .tr-empty { text-align: center; padding: 14px 0; }
   .final { text-align: center; padding: 14px; border-radius: 16px; background: rgba(34,197,94,.12); border: 1px solid rgba(34,197,94,.45); }
   .final b { font-family: var(--head); font-size: 24px; }
   .btn { display: inline-block; padding: 11px 18px; border-radius: 12px; background: var(--blue); font-weight: 700; text-transform: uppercase; letter-spacing: .04em; font-size: 13px; }
   .center { text-align: center; }
+
+  /* Wider screens: use the space */
+  @media (min-width: 900px) {
+    .wrap, .top-in { max-width: 1180px; }
+    .grid { grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); }
+    .list { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); }
+    .tk-board { height: calc(100vh - 175px); min-height: 520px; }
+    .pl-rem { font-size: clamp(90px, 14vh, 150px); }
+  }
+  @media (max-width: 420px) {
+    .pl { padding: 10px 8px; } .pl-name { font-size: 18px; } .pl-stats { gap: 8px; font-size: 12px; }
+    .tr-pts { font-size: 20px; } .tr-rem { font-size: 18px; } .dart { min-width: 44px; font-size: 17px; padding: 7px 6px; }
+  }
 </style>
 </head>
 <body>
@@ -174,6 +191,7 @@
     players: {}, comps: {}, matches: [], live: {},
     ready: { players: false, comps: false, matches: false, live: false },
     old: { loaded: false, leagues: [], matches: [], players: {}, ko: {}, error: "" },
+    liveRecv: {}, liveLag: {},
     error: "",
   };
 
@@ -193,6 +211,7 @@
   try {
     firebase.initializeApp(firebaseConfig);
     db = firebase.firestore();
+    try { db.settings({ experimentalAutoDetectLongPolling: true }); } catch (e2) { /* optional */ }
   } catch (e) { S.error = "Datenbank konnte nicht gestartet werden: " + e.message; }
 
   function listen(name, key, assign) {
@@ -205,7 +224,15 @@
     listen("adl_players", "players", (s) => { S.players = {}; docs(s).forEach((p) => { S.players[p.id] = p; }); });
     listen("adl_competitions", "comps", (s) => { S.comps = {}; docs(s).forEach((c) => { S.comps[c.id] = c; }); });
     listen("adl_matches", "matches", (s) => { S.matches = docs(s); });
-    listen("adl_live", "live", (s) => { S.live = {}; docs(s).forEach((d) => { S.live[d.id] = d; }); });
+    listen("adl_live", "live", (s) => {
+      const prev = S.live; S.live = {};
+      docs(s).forEach((d) => {
+        S.live[d.id] = d;
+        // Transmission time: add-on wrote at updatedMs, we received it now (exact when both clocks agree, e.g. same PC).
+        if (!prev[d.id] || prev[d.id].updatedMs !== d.updatedMs) { S.liveRecv[d.id] = Date.now(); S.liveLag[d.id] = Date.now() - Number(d.updatedMs); }
+        else { S.liveRecv[d.id] = prev[d.id] && S.liveRecv[d.id] || Date.now(); }
+      });
+    });
     // Archive: the old app's data, read once.
     Promise.all(["leagues", "matches", "players", "koPhase"].map((n) => db.collection(n).get())).then((r) => {
       S.old.leagues = docs(r[0]); S.old.matches = docs(r[1]);
@@ -446,6 +473,12 @@
     return viewModel(modelOld(l), r);
   }
 
+  function ageText(d) {
+    const age = Math.max(0, Math.round((Date.now() - Number(d.updatedMs)) / 1000));
+    const lag = S.liveLag[d.id];
+    return "Aktualisiert vor " + age + " s" + (lag != null && lag > -5000 && lag < 600000 ? " · Übertragung " + (Math.max(0, lag) / 1000).toFixed(1) + " s" : "");
+  }
+
   function dartClass(n) { return /^T/.test(n) ? "T" : /^D/.test(n) ? "D" : /^M/.test(n) ? "M" : ""; }
 
   function viewLive(r) {
@@ -454,33 +487,34 @@
     if (!d) return shell(topbar("#/", "Live"), `<div class="empty">Dieses Match wurde nicht gefunden.</div><div class="center"><a class="btn" href="#/">Zur Startseite</a></div>`);
     const ended = d.status !== "laufend", fresh = isLive(d);
     const pl = d.players || [];
+    const recent = d.recent || [];
     const back = d.competitionId && S.comps[d.competitionId] ? "#/c/" + d.competitionId : "#/";
     const chip = ended ? `<span class="tag">${d.status === "beendet" ? "Beendet" : "Abgebrochen"}</span>` : fresh ? `<span class="livechip"><i></i>LIVE</span>` : `<span class="tag">Pausiert</span>`;
-    let body = `<div class="tk-sub">${esc(d.competitionName || "")} · Leg ${esc(d.leg)} · Best of ${esc(d.bestOf)}</div>`;
-    body += `<div class="tk-board">${pl.map((p) => `<div class="pl${p.thrower && !ended ? " on" : ""}">
-      <span class="pl-legs">${esc(p.legs)}</span>${avatar(p.id, 60)}
-      <div class="pl-name">${esc(p.name)}</div>
-      <div class="pl-turn">${p.thrower && !ended ? "am Wurf" : ""}</div>
-      <div class="pl-rem">${esc(p.remaining)}</div>
-      <div class="pl-stats"><span>Ø <b>${p.avg == null ? "–" : Number(p.avg).toFixed(1)}</b></span>${Number(p.total180) > 0 ? `<span>180er <b>${esc(p.total180)}</b></span>` : ""}</div>
-    </div>`).join("")}</div>`;
+    const f1 = (x) => (x == null ? "–" : Number(x).toFixed(1));
+
+    const panel = (p, i) => {
+      const on = !!p.thrower && !ended;
+      const turns = recent.filter((t) => t.p === i);
+      const darts = on ? (d.darts || []) : [];
+      return `<section class="pl${on ? " on" : ""}">
+        <div class="pl-head">${avatar(p.id, 48)}<div class="pl-id"><div class="pl-name">${esc(p.name)}</div><div class="pl-turn">${on ? "am Wurf" : ""}</div></div><span class="pl-legs">${esc(p.legs)}</span></div>
+        <div class="pl-rem">${esc(p.remaining)}</div>
+        <div class="pl-stats"><span>Leg Ø <b>${f1(p.legAvg)}</b></span><span>Match Ø <b>${f1(p.avg)}</b></span>${p.legDarts != null ? `<span>🎯 <b>${esc(p.legDarts)}</b></span>` : ""}${Number(p.total180) > 0 ? `<span>180er <b>${esc(p.total180)}</b></span>` : ""}</div>
+        <div class="darts">${on ? (darts.length ? darts.map((n) => `<span class="dart ${dartClass(n)}">${esc(n)}</span>`).join("") + `<span class="dart-sum">= ${esc(d.turnPoints)}</span>` : `<span class="muted">wirft gleich…</span>`) : ""}</div>
+        <div class="tr-head"><span>Punkte</span><span>Rest</span></div>
+        <div class="tr-list">${turns.length ? turns.map((t) => `<div class="tr"><span class="tr-pts ${t.pts === 180 ? "max" : t.pts >= 100 ? "big" : t.pts === 0 ? "zero" : ""}">${esc(t.pts)}</span>${t.rem != null ? `<span class="tr-rem">${esc(t.rem)}</span>` : `<span></span>`}</div>`).join("") : `<div class="muted tr-empty">Noch keine Aufnahme</div>`}</div>
+      </section>`;
+    };
+
+    let body = `<div class="tk-sub">${esc(d.competitionName || "")} · Leg ${esc(d.leg)} · 501 · Erster bis ${esc(d.legsToWin || "")} Legs · SI-DO</div>`;
     if (ended) {
-      body += `<div class="final"><div class="muted">${d.status === "beendet" ? "Endstand" : "Match abgebrochen"}</div><b>${esc((pl[0] || {}).name)} ${esc((pl[0] || {}).legs)} : ${esc((pl[1] || {}).legs)} ${esc((pl[1] || {}).name)}</b></div>`;
-      if (back !== "#/") body += `<div class="center"><a class="btn" href="${back}">Zur Tabelle</a></div>`;
-    } else {
+      body += `<div class="final"><div class="muted">${d.status === "beendet" ? "Endstand" : "Match abgebrochen"}</div><b>${esc((pl[0] || {}).name)} ${esc((pl[0] || {}).legs)} : ${esc((pl[1] || {}).legs)} ${esc((pl[1] || {}).name)}</b>${back !== "#/" ? `<div style="margin-top:10px"><a class="btn" href="${back}">Zur Tabelle</a></div>` : ""}</div>`;
+    } else if (!fresh) {
       const ageMin = Math.floor((Date.now() - (Number(d.updatedMs) || 0)) / 60000);
-      if (!fresh) body += `<div class="msg">Seit ${ageMin} Min. keine Daten – das Match ist unterbrochen oder beendet.</div>`;
-      const darts = d.darts || [];
-      const thrower = pl.find((p) => p.thrower);
-      body += `<h2 class="sec">${thrower ? esc(thrower.name) : "Aktuelle Aufnahme"}</h2><div class="card"><div class="darts">${darts.length ? darts.map((n) => `<span class="dart ${dartClass(n)}">${esc(n)}</span>`).join("") + `<span class="dart-sum">= ${esc(d.turnPoints)}</span>` : `<span class="muted">wirft gleich…</span>`}</div></div>`;
+      body += `<div class="msg">Seit ${ageMin} Min. keine Daten – das Match ist unterbrochen oder beendet.</div>`;
     }
-    const recent = d.recent || [];
-    if (recent.length) {
-      body += `<h2 class="sec">Letzte Aufnahmen</h2><div class="rt">${recent.map((t) => {
-        const cls = t.pts === 180 ? "max" : t.pts >= 100 ? "big" : "";
-        return t.p === 0 ? `<span class="l ${cls}">${esc(t.pts)}</span><span class="empty"></span>` : `<span class="empty"></span><span class="r ${cls}">${esc(t.pts)}</span>`;
-      }).join("")}</div>`;
-    }
+    body += `<div class="tk-board">${pl.map(panel).join("")}</div>`;
+    body += `<div class="tk-age muted center" id="tk-age">${esc(ageText(d))}</div>`;
     return shell(topbar(back, (pl[0] ? pl[0].name : "") + " vs " + (pl[1] ? pl[1].name : ""), chip), body);
   }
 
@@ -506,6 +540,12 @@
   window.addEventListener("hashchange", () => { if (window.scrollTo) window.scrollTo(0, 0); render(); });
   // Re-check "stale" live matches even when no new data arrives.
   setInterval(() => { const n = parseRoute().name; if (n === "home" || n === "live") scheduleRender(); }, 30000);
+  setInterval(() => {
+    const r = parseRoute();
+    if (r.name !== "live") return;
+    const d = S.live[r.id], el = document.getElementById("tk-age");
+    if (d && el && el !== app) el.textContent = ageText(d);
+  }, 1000);
   render();
 })();
 </script>
