@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
+<meta name="app-version" content="20261002-193158">
 <meta name="theme-color" content="#0b1d4a">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
@@ -221,6 +222,8 @@
     messagingSenderId: "67314819693",
     appId: "1:67314819693:web:610e52b9507f2e19379564"
   };
+  const APP_VERSION = "20261002-193158";
+  const OLD_TICKER_MS = 60 * 60 * 1000; // opening a ticker link that has been silent for an hour leads to the start page
   const LIVE_FRESH_MS = 180000; // a live match without update for 3 minutes is treated as stopped
 
   // Icons for "Add to home screen"
@@ -240,6 +243,7 @@
     ready: { players: false, comps: false, matches: false, live: false },
     old: { loaded: false, leagues: [], matches: [], players: {}, ko: {}, error: "" },
     liveRecv: {}, liveLag: {},
+    initialLive: false, redirectChecked: false, updateAvailable: false,
     fx: {}, fxSeen: {},   // ticker effects: running effects per match, highest turn number already seen
     error: "",
   };
@@ -436,7 +440,7 @@
       <div class="top-title">${esc(title || "Saffer's Liga")}</div>${right || ""}
     </div></header>`;
   }
-  const shell = (top, body) => top + `<main class="wrap">${S.error ? `<div class="msg err">${esc(S.error)}</div>` : ""}${body}</main>`;
+  const shell = (top, body) => top + `<main class="wrap">${S.error ? `<div class="msg err">${esc(S.error)}</div>` : ""}${S.updateAvailable ? `<div class="msg">Es gibt eine neuere Version der App. Bitte die Seite einmal mit Strg + F5 (am Handy: Tab schließen und neu öffnen) neu laden.</div>` : ""}${body}</main>`;
   const loading = () => `<div class="empty">Lade Daten…</div>`;
   const dataReady = () => S.ready.players && S.ready.comps && S.ready.matches;
 
@@ -590,6 +594,18 @@
 
   function viewLive(r) {
     if (!S.ready.live) return shell(topbar("#/", "Live"), loading());
+    if (!S.redirectChecked) {
+      // Opened straight on a ticker address (a saved tab or bookmark)? If that match is not running any
+      // more, go to the start page instead of showing a dead ticker that needs a "back" every time.
+      S.redirectChecked = true;
+      if (S.initialLive) {
+        const d0 = S.live[r.id];
+        if (!d0 || (!isLive(d0) && Date.now() - (Number(d0.updatedMs) || 0) > OLD_TICKER_MS)) {
+          if (location.replace) location.replace("#/"); else location.hash = "#/";
+          return viewHome();
+        }
+      }
+    }
     const d = S.live[r.id];
     if (!d) return shell(topbar("#/", "Live"), `<div class="empty">Dieses Match wurde nicht gefunden.</div><div class="center"><a class="btn" href="#/">Zur Startseite</a></div>`);
     const ended = d.status !== "laufend", fresh = isLive(d);
@@ -631,7 +647,8 @@
       body += `<div class="final"><div class="muted">${d.status === "beendet" ? "Endstand" : "Match abgebrochen"}</div><b>${esc((pl[0] || {}).name)} ${esc((pl[0] || {}).legs)} : ${esc((pl[1] || {}).legs)} ${esc((pl[1] || {}).name)}</b>${back !== "#/" ? `<div style="margin-top:10px"><a class="btn" href="${back}">Zur Tabelle</a></div>` : ""}</div>`;
     } else if (!fresh) {
       const ageMin = Math.floor((Date.now() - (Number(d.updatedMs) || 0)) / 60000);
-      body += `<div class="msg">Seit ${ageMin} Min. keine Daten – das Match ist unterbrochen oder beendet.</div>`;
+      const ageTxt = ageMin >= 120 ? Math.floor(ageMin / 60) + " Std." : ageMin + " Min.";
+      body += `<div class="msg">Seit ${ageTxt} keine Daten – das Match ist unterbrochen oder beendet.</div>`;
     }
     body += `<div class="tk-board">${pl.map(panel).join("")}</div>`;
     if (fx.legwin) fx.legwin.animated = true;
@@ -759,6 +776,31 @@
     const d = S.live[r.id], el = document.getElementById("tk-age");
     if (d && el && el !== app) el.textContent = ageText(d);
   }, 1000);
+  // Self-update: an open or cached copy of this page can be older than the file on the server. Compare the
+  // version stamp of the file on the server (always fetched fresh) with the one running here and reload once.
+  let lastUpdateCheck = 0;
+  function checkForUpdate() {
+    if (typeof fetch !== "function") return;
+    lastUpdateCheck = Date.now();
+    try {
+      fetch(String(location.href).split("#")[0], { cache: "reload" }).then((r) => (r.ok ? r.text() : "")).then((txt) => {
+        const m = String(txt).match(/name="app-version" content="([^"]+)"/);
+        if (!m || m[1] === APP_VERSION) return;
+        let tried = "";
+        try { tried = sessionStorage.getItem("sdl_reloaded_for") || ""; } catch (e) { /* private mode */ }
+        if (tried === m[1]) { S.updateAvailable = true; scheduleRender(); return; } // reloaded once already: ask the user instead of looping
+        try { sessionStorage.setItem("sdl_reloaded_for", m[1]); } catch (e) { /* ignore */ }
+        location.reload();
+      }).catch(() => { /* offline: nothing to do */ });
+    } catch (e) { /* ignore */ }
+  }
+  if (typeof document.addEventListener === "function") {
+    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && Date.now() - lastUpdateCheck > 5 * 60 * 1000) checkForUpdate(); });
+  }
+  setTimeout(checkForUpdate, 1500);
+  setInterval(checkForUpdate, 30 * 60 * 1000);
+
+  S.initialLive = parseRoute().name === "live";
   render();
 })();
 </script>
