@@ -145,6 +145,25 @@
   .btn { display: inline-block; padding: 11px 18px; border-radius: 12px; background: var(--blue); font-weight: 700; text-transform: uppercase; letter-spacing: .04em; font-size: 13px; }
   .center { text-align: center; }
 
+  /* Player statistics */
+  .tbl tr[data-href] { cursor: pointer; }
+  .tbl tr[data-href]:active td { background: rgba(47,107,255,.14); }
+  .hint { color: var(--muted); font-size: 12px; margin: 0 2px; }
+  .st-head { display: flex; align-items: center; gap: 14px; }
+  .st-name { font-family: var(--head); font-size: 30px; font-weight: 700; text-transform: uppercase; line-height: 1.05; }
+  .st { width: 100%; border-collapse: collapse; }
+  .st th { text-align: right; padding: 9px 10px; font-family: var(--head); font-size: 14px; font-weight: 600; color: var(--dim); text-transform: uppercase; background: var(--card2); }
+  .st th:first-child { text-align: left; border-radius: 10px 0 0 10px; } .st th:last-child { border-radius: 0 10px 10px 0; }
+  .st td { padding: 10px; border-bottom: 1px solid var(--line); text-align: right; font-size: 15px; font-weight: 700; }
+  .st tr:last-child td { border-bottom: none; }
+  .st td:first-child { text-align: left; color: var(--dim); font-weight: 600; }
+  .st-wide th, .st-wide td { text-align: center; padding: 10px 4px; font-size: 14px; }
+  .st-wide th:first-child, .st-wide td:first-child { text-align: left; padding-left: 6px; color: var(--text); }
+  .st-wide td:first-child { font-weight: 800; }
+  .card-scroll { overflow-x: auto; }
+  .linkcard { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; font-size: 14px; }
+  .linkcard span:last-child { color: var(--blue); font-size: 22px; line-height: 1; }
+
   /* Wider screens: use the space */
   @media (min-width: 900px) {
     .wrap, .top-in { max-width: 1180px; }
@@ -355,11 +374,11 @@
     return lv ? `<a class="mrow live" href="#/live/${esc(m.autodartsMatchId)}">${inner}</a>` : `<div class="mrow">${inner}</div>`;
   }
 
-  function tableHtml(ids, matches) {
+  function tableHtml(ids, matches, linkBase) {
     const rows = standings(ids, matches);
     if (!rows.length) return `<div class="empty">Noch keine Spieler.</div>`;
     return `<div class="card" style="padding:6px 10px"><table class="tbl"><thead><tr><th>#</th><th style="text-align:left;padding-left:6px">Spieler</th><th>Sp</th><th>S</th><th>Legs</th><th>Ø</th><th>Pkt</th></tr></thead><tbody>
-      ${rows.map((s, i) => `<tr class="${i < 3 ? "top3" : ""}"><td class="pos">${i + 1}</td><td class="pl"><div class="tp">${avatar(s.id, 28)}<span>${esc(P(s.id).name)}</span></div></td><td>${s.played}</td><td>${s.wins}</td><td>${s.legsFor}:${s.legsAgainst}</td><td>${s.avg == null ? "–" : s.avg.toFixed(1)}</td><td class="pts">${s.points}</td></tr>`).join("")}
+      ${rows.map((s, i) => `<tr class="${i < 3 ? "top3" : ""}"${linkBase ? ` data-href="${esc(linkBase + s.id)}"` : ""}><td class="pos">${i + 1}</td><td class="pl"><div class="tp">${avatar(s.id, 28)}<span>${esc(P(s.id).name)}</span></div></td><td>${s.played}</td><td>${s.wins}</td><td>${s.legsFor}:${s.legsAgainst}</td><td>${s.avg == null ? "–" : s.avg.toFixed(1)}</td><td class="pts">${s.points}</td></tr>`).join("")}
     </tbody></table></div>`;
   }
 
@@ -417,6 +436,7 @@
     const past = adl.filter((M) => M.finished).concat(S.old.leagues.map(modelOld)).sort((a, b) => b.ts - a.ts);
     let body = "";
     if (lives.length) body += `<h2 class="sec">Live</h2><div class="grid">${lives.map(liveCard).join("")}</div>`;
+    body += `<a class="card linkcard" href="#/stats"><span>📊 Langzeit-Statistik</span><span>›</span></a>`;
     body += `<h2 class="sec">Aktuell</h2>`;
     body += !dataReady() ? loading() : running.length ? `<div class="grid">${running.map(compCard).join("")}</div>` : `<div class="empty">Gerade läuft keine Liga und kein Turnier.</div>`;
     body += `<h2 class="sec">Vergangene Ligen & Turniere</h2>`;
@@ -439,7 +459,8 @@
 
     const allMatches = M.league.concat(...M.rounds.map((x) => x.matches));
     if (tab === "table" && hasLeague) {
-      body += tableHtml(M.ids, M.league) + honorsHtml(allMatches, M.finished);
+      const linkBase = M.src === "adl" ? "#/c/" + M.id + "/p/" : null;
+      body += (linkBase ? `<div class="hint">Spieler antippen für mehr Statistik</div>` : "") + tableHtml(M.ids, M.league, linkBase) + honorsHtml(allMatches, M.finished);
     } else if (tab === "schedule" && hasLeague) {
       if (M.finished) {
         const rounds = Array.from(new Set(M.league.map((m) => m.round || "")));
@@ -518,12 +539,99 @@
     return shell(topbar(back, (pl[0] ? pl[0].name : "") + " vs " + (pl[1] ? pl[1].name : ""), chip), body);
   }
 
+  // ---- Player statistics (same rules as in the add-on) ----
+  // Detail values only exist for matches that stored statsA/statsB (since the add-on update);
+  // the buckets are exclusive, 60+ / 100+ / 140+ are cumulative.
+  function playerStats(pid, matches) {
+    const s = { played: 0, wins: 0, losses: 0, legsFor: 0, legsAgainst: 0, avgSum: 0, avgCount: 0, bestAvg: null, bestCO: null,
+      detailMatches: 0, darts: 0, plus60: 0, plus100: 0, plus140: 0, plus170: 0, total180: 0, coHit: 0, coAtt: 0 };
+    const num = (v) => (typeof v === "number" && isFinite(v) ? v : 0);
+    matches.forEach((m) => {
+      if (m.status !== "beendet" || m.bye) return;
+      const side = m.playerAId === pid ? "A" : m.playerBId === pid ? "B" : null;
+      if (!side) return;
+      const other = side === "A" ? "B" : "A";
+      const lf = Number(m["legs" + side]) || 0, la = Number(m["legs" + other]) || 0;
+      s.played++; s.legsFor += lf; s.legsAgainst += la;
+      if (lf > la) s.wins++; else if (la > lf) s.losses++;
+      const avg = m["avg" + side];
+      if (avg != null && avg !== "" && !isNaN(avg)) { s.avgSum += Number(avg); s.avgCount++; if (s.bestAvg === null || Number(avg) > s.bestAvg) s.bestAvg = Number(avg); }
+      const co = m["checkout" + side];
+      if (co != null && co !== "" && !isNaN(co) && Number(co) > 0 && (s.bestCO === null || Number(co) > s.bestCO)) s.bestCO = Number(co);
+      const st = m["stats" + side];
+      if (st && typeof st === "object") {
+        s.detailMatches++; s.darts += num(st.darts);
+        s.plus60 += num(st.plus60); s.plus100 += num(st.plus100); s.plus140 += num(st.plus140); s.plus170 += num(st.plus170); s.total180 += num(st.total180);
+        s.coHit += num(st.checkoutsHit); s.coAtt += num(st.checkoutAttempts);
+      }
+    });
+    s.avg = s.avgCount ? s.avgSum / s.avgCount : null;
+    s.winPct = s.played ? s.wins / s.played : null;
+    s.n180 = s.total180; s.n140 = s.plus140 + s.plus170 + s.total180; s.n100 = s.plus100 + s.n140; s.n60 = s.plus60 + s.n100;
+    s.coPct = s.coAtt ? s.coHit / s.coAtt : null;
+    return s;
+  }
+
+  const pct = (x) => (x == null ? "–" : Math.round(x * 100) + " %");
+  function statRows(s) {
+    const d = s.detailMatches > 0;
+    return [
+      ["Spiele", s.played],
+      ["Siege", s.played ? `${s.wins} (${pct(s.winPct)})` : "–"],
+      ["Legs", s.played ? `${s.legsFor}:${s.legsAgainst}` : "–"],
+      ["Ø Average", s.avg == null ? "–" : s.avg.toFixed(2)],
+      ["Bester Match-Ø", fmt2(s.bestAvg)],
+      ["Höchster Checkout", s.bestCO || "–"],
+      ["Checkout-Quote", s.coAtt ? `${pct(s.coPct)} (${s.coHit}/${s.coAtt})` : "–"],
+      ["60+", d ? s.n60 : "–"], ["100+", d ? s.n100 : "–"], ["140+", d ? s.n140 : "–"], ["180", d ? s.n180 : "–"],
+      ["Darts geworfen", d ? s.darts : "–"],
+    ];
+  }
+
+  function viewPlayer(r) {
+    if (!dataReady()) return shell(topbar("#/", "Laden…"), loading());
+    const c = r.compId ? S.comps[r.compId] : null;
+    const back = c ? "#/c/" + c.id : "#/stats";
+    const p = S.players[r.id];
+    if (!p) return shell(topbar(back, "Nicht gefunden"), `<div class="empty">Diesen Spieler gibt es nicht (mehr).</div>`);
+    const fin = S.matches.filter((m) => m.status === "beendet");
+    const lt = playerStats(r.id, fin);
+    const lg = c ? playerStats(r.id, fin.filter((m) => m.competitionId === c.id)) : null;
+    const rowsG = statRows(lt), rowsL = lg ? statRows(lg) : null;
+    const cover = (s) => (s.played && s.detailMatches < s.played ? `${s.detailMatches} von ${s.played} Matches` : "");
+    const notes = [lg && cover(lg) ? "Liga: " + cover(lg) : "", cover(lt) ? "Langzeit: " + cover(lt) : ""].filter(Boolean);
+    const body = `
+      <div class="st-head">${avatar(r.id, 72)}<div class="st-name">${esc(p.name)}</div></div>
+      <div class="card" style="padding:6px 10px"><table class="st">
+        <thead><tr><th></th>${lg ? `<th>${esc(c.name)}</th>` : ""}<th>Langzeit</th></tr></thead>
+        <tbody>${rowsG.map((x, i) => `<tr><td>${x[0]}</td>${rowsL ? `<td>${esc(rowsL[i][1])}</td>` : ""}<td>${esc(x[1])}</td></tr>`).join("")}</tbody>
+      </table></div>
+      <div class="hint">Langzeit = alle Matches in allen Ligen und Turnieren${lg ? "; die Liga-Spalte zählt nur diese Liga (mit KO-Phase)" : ""}.${notes.length ? " Detailwerte (60+, 100+, 140+, 180, Checkout-Quote, Darts) aus " + esc(notes.join(" · ")) + " – ältere Matches wurden noch ohne sie gespeichert." : ""}</div>`;
+    return shell(topbar(back, p.name), body);
+  }
+
+  function viewStats() {
+    if (!dataReady()) return shell(topbar("#/", "Laden…"), loading());
+    const fin = S.matches.filter((m) => m.status === "beendet");
+    const rows = Object.values(S.players).map((p) => ({ p, s: playerStats(p.id, fin) }))
+      .sort((a, b) => b.s.wins - a.s.wins || (b.s.avg || 0) - (a.s.avg || 0) || String(a.p.name).localeCompare(String(b.p.name)));
+    let body = `<h2 class="sec">Langzeit-Statistik</h2><div class="hint">Alle Matches aus allen Ligen und Turnieren. Spieler antippen für alle Werte.</div>`;
+    body += rows.length ? `<div class="card card-scroll" style="padding:6px 8px"><table class="tbl st-wide"><thead><tr><th style="text-align:left;padding-left:6px">Spieler</th><th>Sp</th><th>S</th><th>Ø</th><th>100+</th><th>180</th><th>CO%</th></tr></thead><tbody>
+      ${rows.map(({ p, s }) => `<tr data-href="#/p/${esc(p.id)}"><td><div class="tp">${avatar(p.id, 26)}<span>${esc(p.name)}</span></div></td><td>${s.played}</td><td>${s.wins}</td><td>${s.avg == null ? "–" : s.avg.toFixed(1)}</td><td>${s.detailMatches ? s.n100 : "–"}</td><td>${s.detailMatches ? s.n180 : "–"}</td><td>${s.coAtt ? pct(s.coPct) : "–"}</td></tr>`).join("")}
+    </tbody></table></div>` : `<div class="empty">Noch keine Spieler.</div>`;
+    body += `<div class="hint">Neue Spieler zählen ab ihrem ersten Match mit. Detailwerte (100+, 180, CO%) werden seit dem Add-on-Update gespeichert.</div>`;
+    return shell(topbar("#/", "Statistik"), body);
+  }
+
   // ---------------------------------------------------------------------------
   // Router
   // ---------------------------------------------------------------------------
   function parseRoute() {
     const p = String(location.hash || "").replace(/^#\/?/, "").split("/").filter(Boolean);
     if (p[0] === "live" && p[1]) return { name: "live", id: p[1] };
+    if (p[0] === "c" && p[1] && p[2] === "p" && p[3]) return { name: "player", compId: p[1], id: p[3] };
+    if (p[0] === "p" && p[1]) return { name: "player", compId: null, id: p[1] };
+    if (p[0] === "stats") return { name: "stats" };
     if (p[0] === "c" && p[1]) return { name: "comp", id: p[1], tab: p[2] || "" };
     if (p[0] === "o" && p[1]) return { name: "old", id: p[1], tab: p[2] || "" };
     return { name: "home" };
@@ -532,11 +640,15 @@
   function render() {
     const r = parseRoute();
     let html;
-    try { html = ({ home: viewHome, comp: viewComp, old: viewOld, live: viewLive }[r.name])(r); }
+    try { html = ({ home: viewHome, comp: viewComp, old: viewOld, live: viewLive, player: viewPlayer, stats: viewStats }[r.name])(r); }
     catch (e) { html = shell(topbar(null, "Saffer's Liga"), `<div class="msg err">Anzeigefehler: ${esc(e.message)}</div>`); if (typeof console !== "undefined") console.error(e); }
     app.innerHTML = html;
   }
 
+  app.addEventListener("click", (e) => {
+    const row = e.target && e.target.closest ? e.target.closest("[data-href]") : null;
+    if (row) location.hash = row.getAttribute("data-href");
+  });
   window.addEventListener("hashchange", () => { if (window.scrollTo) window.scrollTo(0, 0); render(); });
   // Re-check "stale" live matches even when no new data arrives.
   setInterval(() => { const n = parseRoute().name; if (n === "home" || n === "live") scheduleRender(); }, 30000);
