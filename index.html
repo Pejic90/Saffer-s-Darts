@@ -163,6 +163,8 @@
   .st-wide th:first-child, .st-wide td:first-child { text-align: left; padding-left: 6px; color: var(--text); }
   .st-wide td:first-child { font-weight: 800; }
   .card-scroll { overflow-x: auto; }
+  .stream-box { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 16px; overflow: hidden; border: 1px solid var(--line); }
+  .stream-box iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
   .linkcard { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; font-size: 14px; }
   .linkcard span:last-child { color: var(--blue); font-size: 22px; line-height: 1; }
 
@@ -521,6 +523,16 @@
     </a>`;
   }
 
+  const STREAM_CHANNEL = "saffer_dartsteam"; // Twitch channel of the board camera
+
+  function viewStream() {
+    const src = "https://player.twitch.tv/?channel=" + encodeURIComponent(STREAM_CHANNEL) + "&parent=" + encodeURIComponent(location.hostname || "localhost") + "&muted=true&autoplay=true";
+    const body = `<div class="stream-box"><iframe src="${esc(src)}" allowfullscreen allow="autoplay; fullscreen" title="Live-Stream"></iframe></div>
+      <div class="center"><a class="btn" href="https://www.twitch.tv/${esc(STREAM_CHANNEL)}" target="_blank" rel="noopener">In Twitch öffnen</a></div>
+      <div class="empty">Läuft gerade kein Stream, zeigt Twitch „Offline“. Das Bild erscheint von selbst, sobald gestreamt wird.</div>`;
+    return shell(topbar("#/", "Live-Stream"), body);
+  }
+
   function viewHome() {
     const lives = liveList();
     const adl = Object.values(S.comps).map(modelAdl).sort((a, b) => b.ts - a.ts);
@@ -528,6 +540,7 @@
     const past = adl.filter((M) => M.finished).concat(S.old.leagues.map(modelOld)).sort((a, b) => b.ts - a.ts);
     let body = "";
     if (lives.length) body += `<h2 class="sec">Live</h2><div class="grid">${lives.map(liveCard).join("")}</div>`;
+    body += `<a class="card linkcard" href="#/stream"><span>📺 Live-Stream (Board)</span><span>›</span></a>`;
     body += `<a class="card linkcard" href="#/stats"><span>📊 Langzeit-Statistik</span><span>›</span></a>`;
     body += `<h2 class="sec">Aktuell</h2>`;
     body += !dataReady() ? loading() : running.length ? `<div class="grid">${running.map(compCard).join("")}</div>` : `<div class="empty">Gerade läuft keine Liga und kein Turnier.</div>`;
@@ -752,6 +765,7 @@
     if (p[0] === "c" && p[1] && p[2] === "p" && p[3]) return { name: "player", compId: p[1], id: p[3] };
     if (p[0] === "p" && p[1]) return { name: "player", compId: null, id: p[1] };
     if (p[0] === "stats") return { name: "stats" };
+    if (p[0] === "stream") return { name: "stream" };
     if (p[0] === "c" && p[1]) return { name: "comp", id: p[1], tab: p[2] || "" };
     if (p[0] === "o" && p[1]) return { name: "old", id: p[1], tab: p[2] || "" };
     return { name: "home" };
@@ -759,8 +773,11 @@
 
   function render() {
     const r = parseRoute();
+    // The stream page is built once: a re-render (new data arrived) would reload the video player.
+    if (r.name === "stream" && app.getAttribute("data-view") === "stream") return;
+    app.setAttribute("data-view", r.name);
     let html;
-    try { html = ({ home: viewHome, comp: viewComp, old: viewOld, live: viewLive, player: viewPlayer, stats: viewStats }[r.name])(r); }
+    try { html = ({ home: viewHome, comp: viewComp, old: viewOld, live: viewLive, player: viewPlayer, stats: viewStats, stream: viewStream }[r.name])(r); }
     catch (e) { html = shell(topbar(null, "Saffer's Liga"), `<div class="msg err">Anzeigefehler: ${esc(e.message)}</div>`); if (typeof console !== "undefined") console.error(e); }
     app.innerHTML = html;
   }
